@@ -14,6 +14,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+import { generateTextures } from "./lib/textures.mjs";
 
 const ROOT = process.cwd();
 const PUBLIC = path.join(ROOT, "public");
@@ -25,15 +26,6 @@ async function ensureDir(relative) {
   const dir = path.join(PUBLIC, relative);
   await mkdir(dir, { recursive: true });
   return dir;
-}
-
-async function writeIfNeeded(filePath, data, label) {
-  if (!force && existsSync(filePath)) {
-    console.log(`· ${label} existe déjà (--force pour régénérer)`);
-    return;
-  }
-  await writeFile(filePath, data);
-  console.log(`✓ ${label}`);
 }
 
 /* ------------------------------------------------------------------ */
@@ -203,132 +195,10 @@ async function generateMenuImages() {
 /* Textures                                                            */
 /* ------------------------------------------------------------------ */
 
-const TEXTURES = {
-  "ground.jpg": `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512">
-    <defs>
-      <filter id="n">
-        <feTurbulence type="fractalNoise" baseFrequency="0.03 0.045" numOctaves="5" seed="7"/>
-        <feColorMatrix type="saturate" values="0.25"/>
-        <feComponentTransfer>
-          <feFuncR type="linear" slope="0.55" intercept="0.12"/>
-          <feFuncG type="linear" slope="0.42" intercept="0.09"/>
-          <feFuncB type="linear" slope="0.26" intercept="0.05"/>
-        </feComponentTransfer>
-      </filter>
-      <radialGradient id="v" cx="50%" cy="50%" r="70%">
-        <stop offset="0%" stop-color="#6b4a2f"/>
-        <stop offset="100%" stop-color="#3c2a1a"/>
-      </radialGradient>
-    </defs>
-    <rect width="512" height="512" fill="url(#v)"/>
-    <rect width="512" height="512" filter="url(#n)" opacity="0.85"/>
-  </svg>`,
-  "bark.jpg": `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="512">
-    <defs>
-      <filter id="n">
-        <feTurbulence type="fractalNoise" baseFrequency="0.012 0.14" numOctaves="4" seed="3"/>
-        <feColorMatrix type="saturate" values="0.15"/>
-        <feComponentTransfer>
-          <feFuncR type="linear" slope="0.7" intercept="0.16"/>
-          <feFuncG type="linear" slope="0.5" intercept="0.11"/>
-          <feFuncB type="linear" slope="0.36" intercept="0.07"/>
-        </feComponentTransfer>
-      </filter>
-    </defs>
-    <rect width="256" height="512" fill="#4a3a2a"/>
-    <rect width="256" height="512" filter="url(#n)"/>
-  </svg>`,
-  "rock.jpg": `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512">
-    <defs>
-      <filter id="n">
-        <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="6" seed="11"/>
-        <feColorMatrix type="saturate" values="0.08"/>
-        <feComponentTransfer>
-          <feFuncR type="linear" slope="0.5" intercept="0.3"/>
-          <feFuncG type="linear" slope="0.5" intercept="0.3"/>
-          <feFuncB type="linear" slope="0.48" intercept="0.29"/>
-        </feComponentTransfer>
-      </filter>
-    </defs>
-    <rect width="512" height="512" fill="#6a6a62"/>
-    <rect width="512" height="512" filter="url(#n)" opacity="0.9"/>
-  </svg>`,
-  "water_normal.jpg": `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
-    <defs>
-      <filter id="n">
-        <feTurbulence type="fractalNoise" baseFrequency="0.02 0.06" numOctaves="3" seed="5"/>
-        <feColorMatrix values="0.5 0 0 0 0.2  0 0.5 0 0 0.4  0 0 0.5 0 0.7  0 0 0 0 1"/>
-      </filter>
-    </defs>
-    <rect width="256" height="256" fill="#8080ff"/>
-    <rect width="256" height="256" filter="url(#n)" opacity="0.85"/>
-  </svg>`,
-};
-
-function leafPng({ width = 512, height = 512, kind = "fern" } = {}) {
-  const blades =
-    kind === "fern"
-      ? Array.from({ length: 9 }, (_, i) => {
-          const angle = -55 + i * 14;
-          const length = 210 + (i % 3) * 40;
-          const rad = (angle * Math.PI) / 180;
-          const ex = 256 + Math.sin(rad) * length;
-          const ey = 500 - Math.cos(rad) * length;
-          const leaflets = Array.from({ length: 7 }, (__, k) => {
-            const t = (k + 1) / 8;
-            const px = 256 + (ex - 256) * t;
-            const py = 500 + (ey - 500) * t;
-            const side = k % 2 === 0 ? 1 : -1;
-            const lx = px + side * (18 - k) * 1.6;
-            const ly = py + 8;
-            return `<path d="M${px},${py} Q${lx},${ly - 16} ${lx + side * 12},${ly + 4} Q${lx},${ly + 10} ${px},${py}" fill="#4b7f4a" opacity="0.85"/>`;
-          }).join("");
-          return `<path d="M256,500 L${ex},${ey}" stroke="#2f5a34" stroke-width="4" stroke-linecap="round"/>${leaflets}`;
-        }).join("")
-      : Array.from({ length: 14 }, (_, i) => {
-          const angle = (i / 14) * Math.PI * 2;
-          const length = 150 + (i % 4) * 34;
-          const ex = 256 + Math.cos(angle) * length;
-          const ey = 256 + Math.sin(angle) * length * 0.75;
-          const cx = 256 + Math.cos(angle + 0.4) * length * 0.55;
-          const cy = 256 + Math.sin(angle + 0.4) * length * 0.5;
-          const colour = i % 2 === 0 ? "#3f6b3a" : "#4e7c42";
-          return `<path d="M256,256 Q${cx},${cy} ${ex},${ey} Q${(cx + 256) / 2},${(cy + 256) / 2 + 26} 256,256" fill="${colour}" opacity="0.9"/>`;
-        }).join("");
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 512 512">
-    <g>${blades}</g>
-  </svg>`;
-}
-
-async function generateTextures() {
-  const dir = await ensureDir("textures");
-
-  for (const [name, svg] of Object.entries(TEXTURES)) {
-    const target = path.join(dir, name);
-    if (!force && existsSync(target)) {
-      console.log(`· textures/${name} existe déjà`);
-      continue;
-    }
-    await sharp(Buffer.from(svg)).jpeg({ quality: 78, mozjpeg: true }).toFile(target);
-    console.log(`✓ textures/${name}`);
-  }
-
-  const alphas = [
-    { name: "fern.png", svg: leafPng({ kind: "fern" }) },
-    { name: "bigleaf.png", svg: leafPng({ kind: "leaf" }) },
-    { name: "foliage.png", svg: leafPng({ kind: "leaf" }) },
-  ];
-
-  for (const alpha of alphas) {
-    const target = path.join(dir, alpha.name);
-    if (!force && existsSync(target)) {
-      console.log(`· textures/${alpha.name} existe déjà`);
-      continue;
-    }
-    await sharp(Buffer.from(alpha.svg)).png({ compressionLevel: 9 }).toFile(target);
-    console.log(`✓ textures/${alpha.name}`);
-  }
+// Les textures de la forêt sont dessinées dans scripts/lib/textures.mjs
+// (feuillages à découpe alpha, écorce, litière, canopée, brume, roche).
+async function generateForestTextures() {
+  await generateTextures({ publicDir: PUBLIC, force });
 }
 
 /* ------------------------------------------------------------------ */
@@ -697,7 +567,7 @@ async function main() {
   console.log("Génération des assets Minkébé…\n");
   await generateIcons();
   await generateMenuImages();
-  await generateTextures();
+  await generateForestTextures();
   await generateModels();
   await generateAudio();
   console.log("\nTerminé. Remplacez librement ces fichiers par vos propres assets.");

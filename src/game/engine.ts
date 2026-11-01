@@ -8,7 +8,7 @@
 
 import { type Character, defaultCharacter, getCharacter, speedFor } from "./characters";
 import { type Species, faunaScore, spawnFor } from "./fauna";
-import { type GadgetState, initialGadgets, useGadget } from "./gadgets";
+import { type GadgetState, consumeGadget, initialGadgets } from "./gadgets";
 import { DEFAULT_START, type Zone, zoneAt } from "./levels";
 import { type Outfit, getOutfit } from "./outfits";
 import {
@@ -212,11 +212,14 @@ function clampWorld(value: number): number {
   return Math.min(limit, Math.max(-limit, value));
 }
 
-/** Utilise un gadget et renvoie l'état mis à jour. */
-export function useItem(state: GameState, gadgetId: string, seconds: number): GameState {
+/**
+ * Utilise un gadget et renvoie l'état mis à jour.
+ * `applyGadget` plutôt que `useItem` pour la même raison : pas de faux hook.
+ */
+export function applyGadget(state: GameState, gadgetId: string, seconds: number): GameState {
   const gadgets = state.gadgets.map((g) => {
     if (g.id !== gadgetId) return g;
-    return useGadget(g, seconds) ?? g;
+    return consumeGadget(g, seconds) ?? g;
   });
   return { ...state, gadgets };
 }

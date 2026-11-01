@@ -323,7 +323,7 @@ export default function HomePage() {
             <ul className="space-y-1 text-[0.72rem] text-mist/60">
               <li><a href="#jeu" className="hover:text-parchment">Dans le navigateur</a></li>
               <li><a href="#telecharger" className="hover:text-parchment">Windows · macOS · Android</a></li>
-              <li><a href="/api/download/source" className="hover:text-parchment">Héberger un serveur</a></li>
+              <li><a href="/api/download/source" download className="hover:text-parchment">Héberger un serveur</a></li>
             </ul>
           </div>
           <div>

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { countSaves } from "@/lib/saves";
 import { paymentStats } from "@/lib/payments";
 import { listRooms, playerCount, roomCount } from "@/lib/rooms";
@@ -83,9 +84,9 @@ export default async function AdminPage({
             {formatUptime(uptimeSeconds())}
           </p>
         </div>
-        <a href="/" className="btn btn-ghost !px-4 !py-2 !text-xs">
+        <Link href="/" className="btn btn-ghost !px-4 !py-2 !text-xs">
           ← Retour au site
-        </a>
+        </Link>
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

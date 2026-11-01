@@ -26,13 +26,6 @@ export default function TouchControls({ onMove, onAction, visible = true }: Touc
   const activeId = useRef<number | null>(null);
   const [running, setRunning] = useState(false);
 
-  const handleStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    activeId.current = event.pointerId;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    update(event);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const update = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const pad = padRef.current;
@@ -51,6 +44,17 @@ export default function TouchControls({ onMove, onAction, visible = true }: Touc
       onMove({ x: dx / RADIUS, y: dy / RADIUS });
     },
     [onMove],
+  );
+
+  // `update` est déclaré avant `handleStart` : sinon on référence la variable
+  // avant son initialisation (la capture d'écouteur, elle, est bien tardive).
+  const handleStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      activeId.current = event.pointerId;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      update(event);
+    },
+    [update],
   );
 
   const handleEnd = useCallback(

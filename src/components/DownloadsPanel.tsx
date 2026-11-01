@@ -85,7 +85,12 @@ export default function DownloadsPanel({ compact = false }: { compact?: boolean 
             {loading && <span className="ml-2 text-mist/35">(mise à jour…)</span>}
           </p>
         </div>
-        <a href="/api/download" className="text-[0.7rem] text-moss-300 underline-offset-4 hover:underline">
+        <a
+          href="/api/download"
+          target="_blank"
+          rel="noreferrer"
+          className="text-[0.7rem] text-moss-300 underline-offset-4 hover:underline"
+        >
           Métadonnées JSON
         </a>
       </header>

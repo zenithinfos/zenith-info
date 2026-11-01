@@ -3,16 +3,39 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import type { Weather } from "@/game/realism";
-import { FOREST_PALETTE, SCENE_CONFIG, TEXTURES, qualityBudget } from "@/game/sceneConfig";
+import {
+  FOLIAGE_TINTS,
+  FOREST_PALETTE,
+  SCENE_CONFIG,
+  TEXTURES,
+  qualityBudget,
+} from "@/game/sceneConfig";
 import { WATER_BODIES, rainParams } from "@/game/water";
 import { ZONES } from "@/game/levels";
+import {
+  crownCards,
+  densityAt,
+  generateForest,
+  generateLogs,
+  generateUnderstory,
+  mulberry32,
+} from "@/game/forest";
+import { terrainHeight } from "@/game/terrain";
 
 /**
  * Scène 3D de la réserve.
  *
- * Le composant crée le monde une seule fois puis expose un contrôleur
- * impératif : le moteur de jeu (MinkebeGame) met à jour la position et
- * l'environnement à 60 Hz sans provoquer de rendu React.
+ * Le monde est bâti une seule fois puis piloté par un contrôleur impératif :
+ * le moteur de jeu (MinkebeGame) met à jour position et environnement à 60 Hz
+ * sans provoquer de rendu React.
+ *
+ * Rendu de la forêt :
+ *   · trois strates instanciées (canopée, sous-bois, sol) ;
+ *   · feuillages en cartes alpha-testées, ce qui permet des silhouettes
+ *     découpées et de vraies ombres feuillues (Three gère alphaTest dans le
+ *     depth material des ombres) ;
+ *   · plafond de canopée + brouillard : on ne voit jamais le ciel depuis le
+ *     sentier, sauf dans les bais.
  */
 
 export interface SceneController {
@@ -33,6 +56,8 @@ export interface SceneController {
   setPaused: (paused: boolean) => void;
   getYaw: () => number;
   requestLook: () => void;
+  /** Nombre d'arbres effectivement générés (diagnostic / HUD). */
+  getStats: () => { trees: number; understory: number; logs: number };
   dispose: () => void;
 }
 
@@ -44,44 +69,38 @@ export interface SceneProps {
   className?: string;
 }
 
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+/** Rayon de la trouée laissée autour du point de départ. */
+const SPAWN_CLEARING = 7;
 
 /**
- * Hauteur du terrain en un point du monde.
- *
- * Utilisée à la fois pour déformer le sol et pour poser les objets dessus
- * (arbres, fougères, rochers) : sans cela, la végétation flotte ou s'enfonce
- * dès que le relief ondule. Les plans d'eau creusent une cuvette dont la berge
- * affleure exactement le niveau de l'eau.
+ * Texture de rai de lumière : dégradé doux, transparent sur les bords.
+ * Dessinée à la volée pour éviter un fichier supplémentaire.
  */
-function terrainHeight(x: number, z: number): number {
-  const base =
-    Math.sin(x * 0.031) * Math.cos(z * 0.027) * 0.85 +
-    Math.sin((x + z) * 0.011) * 1.15 -
-    0.15;
+function makeShaftTexture(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const gradient = ctx.createLinearGradient(0, 0, 0, 256);
+    gradient.addColorStop(0, "rgba(255, 240, 200, 0.55)");
+    gradient.addColorStop(0.45, "rgba(255, 232, 170, 0.22)");
+    gradient.addColorStop(1, "rgba(255, 226, 160, 0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 64, 256);
 
-  let height = base;
-
-  for (const body of WATER_BODIES) {
-    const nx = Math.abs(x - body.center[0]) / (body.width / 2);
-    const nz = Math.abs(z - body.center[1]) / (body.depth / 2);
-    const d = Math.max(nx, nz); // 0 au centre, 1 sur la rive
-    if (d > 1.35) continue;
-
-    const shore = 1 - THREE.MathUtils.smoothstep(d, 1.0, 1.35);
-    const bed = body.level - 1.6 * (1 - Math.min(1, d));
-    height = THREE.MathUtils.lerp(height, bed, shore);
+    // Bords fondus horizontalement.
+    const side = ctx.createLinearGradient(0, 0, 64, 0);
+    side.addColorStop(0, "rgba(0,0,0,1)");
+    side.addColorStop(0.5, "rgba(0,0,0,0)");
+    side.addColorStop(1, "rgba(0,0,0,1)");
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = side;
+    ctx.fillRect(0, 0, 64, 256);
   }
-
-  return height;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 export default function Scene({ onReady, onError, quality = "auto", className = "" }: SceneProps) {
@@ -100,8 +119,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         powerPreference: "high-performance",
       });
     } catch {
-      setUnsupported(true);
-      onError?.("WebGL n'est pas disponible sur cet appareil.");
+      // Hors du corps de l'effet : évite un rendu en cascade pendant le montage.
+      queueMicrotask(() => {
+        setUnsupported(true);
+        onError?.("WebGL n'est pas disponible sur cet appareil.");
+      });
       return;
     }
 
@@ -128,11 +150,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(SCENE_CONFIG.background);
-    scene.fog = new THREE.Fog(
-      SCENE_CONFIG.fog.color,
-      SCENE_CONFIG.fog.near,
-      SCENE_CONFIG.fog.far,
-    );
+    scene.fog = new THREE.Fog(SCENE_CONFIG.fog.color, 8, 110);
 
     const camera = new THREE.PerspectiveCamera(
       SCENE_CONFIG.camera.fov,
@@ -141,6 +159,43 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       SCENE_CONFIG.camera.far,
     );
     camera.position.set(0, SCENE_CONFIG.camera.height, 6);
+
+    /**
+     * Uniformes partagés par tous les shaders animés (vent, eau). On garde une
+     * seule référence par uniforme : la date de compilation du programme est
+     * mise en cache via customProgramCacheKey, sinon Three réutilise le premier
+     * programme compilé et les autres feuillages cessent de bouger.
+     */
+    const sharedTime = { value: 0 };
+
+    // ------------------------------------------------------------------
+    // Chargement des textures
+    // ------------------------------------------------------------------
+    const textureLoader = new THREE.TextureLoader();
+    const textures: THREE.Texture[] = [];
+
+    const loadTexture = (
+      path: string,
+      onLoad: (texture: THREE.Texture) => void,
+      repeat?: [number, number],
+    ) => {
+      textureLoader.load(
+        path,
+        (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+          if (repeat) texture.repeat.set(repeat[0], repeat[1]);
+          textures.push(texture);
+          onLoad(texture);
+        },
+        undefined,
+        () => {
+          /* texture absente : on garde la couleur unie, la scène reste jouable */
+        },
+      );
+    };
 
     // ------------------------------------------------------------------
     // Lumières
@@ -162,78 +217,66 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       SCENE_CONFIG.lighting.sun.color,
       SCENE_CONFIG.lighting.sun.intensity,
     );
-    sun.position.set(
-      SCENE_CONFIG.lighting.sun.position.x,
-      SCENE_CONFIG.lighting.sun.position.y,
-      SCENE_CONFIG.lighting.sun.position.z,
-    );
+    sun.position.set(46, 96, 34);
     sun.castShadow = renderer.shadowMap.enabled;
     sun.shadow.mapSize.set(budget.shadowMapSize, budget.shadowMapSize);
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 320;
-    sun.shadow.camera.left = -90;
-    sun.shadow.camera.right = 90;
-    sun.shadow.camera.top = 90;
-    sun.shadow.camera.bottom = -90;
+    sun.shadow.camera.far = 220;
+    sun.shadow.camera.left = -46;
+    sun.shadow.camera.right = 46;
+    sun.shadow.camera.top = 46;
+    sun.shadow.camera.bottom = -46;
     sun.shadow.bias = SCENE_CONFIG.shadows.bias;
+    sun.shadow.normalBias = 0.04;
     scene.add(sun);
     scene.add(sun.target);
 
-    const moon = new THREE.DirectionalLight(
-      SCENE_CONFIG.lighting.moon.color,
-      0,
-    );
+    const moon = new THREE.DirectionalLight(SCENE_CONFIG.lighting.moon.color, 0);
     moon.position.set(-50, 80, -30);
     scene.add(moon);
 
     // ------------------------------------------------------------------
     // Sol
     // ------------------------------------------------------------------
-    const textureLoader = new THREE.TextureLoader();
-    const textures: THREE.Texture[] = [];
-
-    const loadTexture = (path: string, onLoad: (t: THREE.Texture) => void) => {
-      textureLoader.load(
-        path,
-        (texture) => {
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.wrapS = THREE.RepeatWrapping;
-          texture.wrapT = THREE.RepeatWrapping;
-          textures.push(texture);
-          onLoad(texture);
-        },
-        undefined,
-        () => {
-          /* texture absente : on garde la couleur unie */
-        },
-      );
-    };
-
     const groundGeometry = new THREE.PlaneGeometry(
       SCENE_CONFIG.ground.size,
       SCENE_CONFIG.ground.size,
-      SCENE_CONFIG.ground.segments,
-      SCENE_CONFIG.ground.segments,
+      SCENE_CONFIG.ground.segments * 2,
+      SCENE_CONFIG.ground.segments * 2,
     );
     groundGeometry.rotateX(-Math.PI / 2);
 
-    // Relief doux : ondulations déterministes, creusées autour des plans d'eau
-    // pour que la surface de l'eau reste visible et que la berge descende.
-    const position = groundGeometry.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < position.count; i++) {
-      position.setY(i, terrainHeight(position.getX(i), position.getZ(i)));
+    const groundPositions = groundGeometry.attributes.position as THREE.BufferAttribute;
+    const groundColours = new Float32Array(groundPositions.count * 3);
+    const colour = new THREE.Color();
+
+    for (let i = 0; i < groundPositions.count; i++) {
+      const x = groundPositions.getX(i);
+      const z = groundPositions.getZ(i);
+      groundPositions.setY(i, terrainHeight(x, z));
+
+      // Ombre de canopée : plus la forêt est dense, plus le sol est sombre.
+      const density = densityAt(x, z);
+      const exposure = 0.45 + (1 - density) * 0.85;
+      // Légère variation pour éviter un aplat.
+      const grain = 0.92 + random() * 0.16;
+      colour.setRGB(0.34 * exposure * grain, 0.3 * exposure * grain, 0.22 * exposure * grain);
+      groundColours[i * 3] = colour.r;
+      groundColours[i * 3 + 1] = colour.g;
+      groundColours[i * 3 + 2] = colour.b;
     }
+    groundGeometry.setAttribute("color", new THREE.BufferAttribute(groundColours, 3));
     groundGeometry.computeVertexNormals();
 
     const groundMaterial = new THREE.MeshStandardMaterial({
-      color: FOREST_PALETTE.earth,
-      roughness: 0.96,
+      color: 0xffffff,
+      roughness: 0.97,
       metalness: 0,
+      vertexColors: true,
     });
     loadTexture(TEXTURES.ground, (texture) => {
-      texture.repeat.set(48, 48);
+      texture.repeat.set(70, 70);
       groundMaterial.map = texture;
-      groundMaterial.color.set(0xffffff);
       groundMaterial.needsUpdate = true;
     });
 
@@ -242,13 +285,77 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     scene.add(ground);
 
     // ------------------------------------------------------------------
-    // Végétation instanciée
+    // Matériaux partagés
     // ------------------------------------------------------------------
-    const trunkGeometry = new THREE.CylinderGeometry(0.32, 0.52, 9, 6, 1);
-    trunkGeometry.translate(0, 4.5, 0);
+
+    /**
+     * Matériau de feuillage : carte alpha-testée, double face, et léger
+     * balancement dans le vent injecté dans le vertex shader.
+     */
+    const foliageMaterial = (
+      map: string | null,
+      options: { tint?: number; sway?: number; alphaTest?: number } = {},
+    ) => {
+      const sway = options.sway ?? 0.08;
+      const material = new THREE.MeshStandardMaterial({
+        color: options.tint ?? 0xffffff,
+        roughness: 0.92,
+        metalness: 0,
+        side: THREE.DoubleSide,
+        alphaTest: options.alphaTest ?? 0.42,
+        transparent: false,
+      });
+      if (map) {
+        loadTexture(map, (texture) => {
+          material.map = texture;
+          material.needsUpdate = true;
+        });
+      }
+
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uTime = sharedTime;
+        shader.uniforms.uSway = { value: sway };
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nuniform float uTime;\nuniform float uSway;")
+          .replace(
+            "#include <begin_vertex>",
+            `#include <begin_vertex>
+             #ifdef USE_INSTANCING
+               float phase = instanceMatrix[3].x * 0.31 + instanceMatrix[3].z * 0.23;
+               float amount = uSway * clamp(transformed.y + 0.5, 0.0, 1.6);
+               transformed.x += sin(uTime * 1.15 + phase) * amount;
+               transformed.z += cos(uTime * 0.93 + phase * 1.7) * amount * 0.8;
+             #endif`,
+          );
+      };
+      // Clé distincte par matériau : sinon Three réutilise le programme du
+      // premier matériau compilé et les uniformes de vent divergent.
+      material.customProgramCacheKey = () => `minkebe-foliage-${sway}-${material.alphaTest}`;
+      return material;
+    };
+
+    // ------------------------------------------------------------------
+    // Forêt
+    // ------------------------------------------------------------------
+    const trees = generateForest({
+      treeCount: budget.trees,
+      seed: 20261101,
+      clearingRadius: SPAWN_CLEARING,
+    });
+    const understory = generateUnderstory({
+      count: budget.understory,
+      seed: 4242,
+      clearingRadius: SPAWN_CLEARING - 3,
+    });
+    const logs = generateLogs({ count: budget.logs, seed: 909 });
+
+    // --- Fûts ---------------------------------------------------------
+    const trunkGeometry = new THREE.CylinderGeometry(0.62, 1, 1, 7, 2, true);
+    trunkGeometry.translate(0, 0.5, 0);
     const trunkMaterial = new THREE.MeshStandardMaterial({
       color: FOREST_PALETTE.bark,
-      roughness: 0.94,
+      roughness: 0.95,
+      metalness: 0,
     });
     loadTexture(TEXTURES.bark, (texture) => {
       texture.repeat.set(1, 3);
@@ -256,137 +363,289 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       trunkMaterial.needsUpdate = true;
     });
 
-    const canopyGeometry = new THREE.IcosahedronGeometry(3.1, 1);
-    const canopyMaterial = new THREE.MeshStandardMaterial({
-      color: FOREST_PALETTE.canopy,
-      roughness: 0.9,
-      flatShading: true,
-    });
+    const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, trees.length);
+    trunkMesh.castShadow = true;
+    trunkMesh.receiveShadow = true;
 
-    const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, budget.trees);
-    const canopies = new THREE.InstancedMesh(canopyGeometry, canopyMaterial, budget.trees * 2);
-    trunks.castShadow = true;
-    canopies.castShadow = true;
-    canopies.receiveShadow = false;
+    // Contreforts / empattement des grands arbres.
+    const buttressGeometry = new THREE.CylinderGeometry(0.85, 1.35, 1, 7, 1, true);
+    buttressGeometry.translate(0, 0.5, 0);
+    const buttressMesh = new THREE.InstancedMesh(
+      buttressGeometry,
+      trunkMaterial,
+      trees.filter((tree) => tree.kind !== "understory").length,
+    );
+    buttressMesh.castShadow = true;
+    buttressMesh.receiveShadow = true;
 
     const dummy = new THREE.Object3D();
-    let canopyIndex = 0;
+    const tintColor = new THREE.Color();
+
     let trunkIndex = 0;
-
-    for (let i = 0; i < budget.trees; i++) {
-      const angle = random() * Math.PI * 2;
-      const distance = 8 + Math.sqrt(random()) * 210;
-      const x = Math.cos(angle) * distance;
-      const z = Math.sin(angle) * distance;
-      // On dégage les zones d'eau et les clairières.
-      const inWater = WATER_BODIES.some(
-        (body) =>
-          Math.abs(x - body.center[0]) < body.width / 2 + 4 &&
-          Math.abs(z - body.center[1]) < body.depth / 2 + 4,
-      );
-      if (inWater) continue;
-
-      const ground = terrainHeight(x, z);
-      const scale = 0.7 + random() * 1.5;
-      dummy.position.set(x, ground, z);
-      dummy.rotation.set(0, random() * Math.PI * 2, 0);
-      dummy.scale.set(scale * 0.9, scale, scale * 0.9);
+    let buttressIndex = 0;
+    for (const tree of trees) {
+      dummy.position.set(tree.x, tree.y - 0.3, tree.z);
+      dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1]);
+      dummy.scale.set(tree.trunkRadius, tree.trunkHeight, tree.trunkRadius);
       dummy.updateMatrix();
-      trunks.setMatrixAt(trunkIndex++, dummy.matrix);
+      trunkMesh.setMatrixAt(trunkIndex, dummy.matrix);
+      // Écorce : les vieux arbres sont plus sombres.
+      tintColor.setHex(0xffffff).multiplyScalar(
+        tree.kind === "emergent" ? 0.78 : tree.kind === "mid" ? 0.92 : 1,
+      );
+      trunkMesh.setColorAt(trunkIndex, tintColor);
+      trunkIndex += 1;
 
-      for (let c = 0; c < 2; c++) {
-        dummy.position.set(
-          x + (random() - 0.5) * 2.4,
-          ground + 7.2 * scale + random() * 2.6,
-          z + (random() - 0.5) * 2.4,
-        );
-        dummy.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
-        dummy.scale.setScalar(scale * (0.7 + random() * 0.55));
+      if (tree.kind !== "understory") {
+        const height = tree.kind === "emergent" ? tree.trunkHeight * 0.32 : tree.trunkHeight * 0.24;
+        dummy.position.set(tree.x, tree.y - 0.35, tree.z);
+        dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1]);
+        dummy.scale.set(tree.trunkRadius * 2.1, height, tree.trunkRadius * 2.1);
         dummy.updateMatrix();
-        if (canopyIndex < canopies.instanceMatrix.count) {
-          canopies.setMatrixAt(canopyIndex++, dummy.matrix);
+        buttressMesh.setMatrixAt(buttressIndex, dummy.matrix);
+        buttressIndex += 1;
+      }
+    }
+    trunkMesh.count = trunkIndex;
+    buttressMesh.count = buttressIndex;
+    trunkMesh.instanceMatrix.needsUpdate = true;
+    buttressMesh.instanceMatrix.needsUpdate = true;
+    if (trunkMesh.instanceColor) trunkMesh.instanceColor.needsUpdate = true;
+    scene.add(trunkMesh, buttressMesh);
+
+    // --- Cartes de feuillage ------------------------------------------
+    const cardGeometry = new THREE.PlaneGeometry(1, 1);
+
+    // Trois familles de feuillage : on alterne pour casser la répétition.
+    const foliageMaterials = [
+      foliageMaterial(TEXTURES.foliage, { tint: 0xdfe8d2, sway: 0.07 }),
+      foliageMaterial(TEXTURES.foliageDeep, { tint: 0xa8bb9a, sway: 0.05 }),
+      foliageMaterial(TEXTURES.foliagePale, { tint: 0xeaf2dd, sway: 0.09 }),
+    ];
+
+    const cards: { matrix: THREE.Matrix4; colour: THREE.Color; family: number }[] = [];
+    for (const tree of trees) {
+      for (const card of crownCards(tree, random)) {
+        dummy.position.set(
+          tree.x + card.offset[0],
+          tree.y + card.offset[1],
+          tree.z + card.offset[2],
+        );
+        if (card.horizontal) {
+          dummy.rotation.set(-Math.PI / 2 + (random() - 0.5) * card.tilt, card.angle, 0);
+        } else {
+          dummy.rotation.set((random() - 0.5) * card.tilt, card.angle, (random() - 0.5) * card.tilt);
         }
+        dummy.scale.set(card.width, card.height, 1);
+        dummy.updateMatrix();
+        cards.push({
+          matrix: dummy.matrix.clone(),
+          colour: new THREE.Color(
+            FOLIAGE_TINTS[Math.floor(random() * FOLIAGE_TINTS.length)],
+          ).multiplyScalar(0.85 + random() * 0.3),
+          family: Math.floor(random() * 3),
+        });
       }
     }
 
-    // Indispensable : les instances non renseignées gardent une matrice
-    // identité et s'empileraient à l'origine (au point de spawn du joueur).
-    trunks.count = trunkIndex;
-    canopies.count = canopyIndex;
-    trunks.instanceMatrix.needsUpdate = true;
-    canopies.instanceMatrix.needsUpdate = true;
-    scene.add(trunks, canopies);
+    // Une InstancedMesh par famille ; la taille de chaque famille est calculée
+    // exactement (les instances non remplies s'empileraient à l'origine).
+    for (let family = 0; family < 3; family++) {
+      const subset = cards.filter((card) => card.family === family);
+      if (subset.length === 0) continue;
+      const mesh = new THREE.InstancedMesh(cardGeometry, foliageMaterials[family], subset.length);
+      subset.forEach((card, index) => {
+        mesh.setMatrixAt(index, card.matrix);
+        mesh.setColorAt(index, card.colour);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+    }
 
-    // Fougères : plans croisés avec texture alpha.
-    const fernGeometry = new THREE.PlaneGeometry(1.6, 1.2);
-    fernGeometry.translate(0, 0.55, 0);
-    const fernMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4e7a3d,
-      roughness: 0.9,
-      transparent: true,
-      alphaTest: 0.35,
-      side: THREE.DoubleSide,
+    // --- Plafond de canopée -------------------------------------------
+    // Quelques grandes nappes au-dessus de la scène : elles bouchent le ciel
+    // et donnent ce vert « sous la tente » propre aux forêts de terre ferme.
+    const ceilingGroup = new THREE.Group();
+    const ceilingMaterial = foliageMaterial(TEXTURES.canopy, {
+      tint: 0x9fb28e,
+      sway: 0.12,
+      alphaTest: 0.36,
     });
-    loadTexture(TEXTURES.fern, (texture) => {
-      fernMaterial.map = texture;
-      fernMaterial.alphaMap = texture;
-      fernMaterial.needsUpdate = true;
-    });
-
-    const fernCount = budget.ferns;
-    const ferns = new THREE.InstancedMesh(fernGeometry, fernMaterial, fernCount);
-    for (let i = 0; i < fernCount; i++) {
+    const ceilingGeometry = new THREE.PlaneGeometry(1, 1);
+    const ceilingCount = isMobile || reduced ? 24 : 52;
+    const ceilingMesh = new THREE.InstancedMesh(ceilingGeometry, ceilingMaterial, ceilingCount);
+    ceilingMesh.frustumCulled = false;
+    for (let i = 0; i < ceilingCount; i++) {
       const angle = random() * Math.PI * 2;
-      const distance = 3 + Math.sqrt(random()) * 150;
+      const distance = Math.sqrt(random()) * 230;
       const x = Math.cos(angle) * distance;
       const z = Math.sin(angle) * distance;
-      dummy.position.set(x, terrainHeight(x, z) - 0.05, z);
-      dummy.rotation.set(0, random() * Math.PI * 2, 0);
-      dummy.scale.setScalar(0.6 + random() * 1.1);
+      dummy.position.set(x, 26 + random() * 12, z);
+      dummy.rotation.set(-Math.PI / 2 + (random() - 0.5) * 0.12, random() * Math.PI, 0);
+      dummy.scale.setScalar(58 + random() * 52);
       dummy.updateMatrix();
-      ferns.setMatrixAt(i, dummy.matrix);
+      ceilingMesh.setMatrixAt(i, dummy.matrix);
+      tintColor.setRGB(0.62 + random() * 0.18, 0.72 + random() * 0.16, 0.55 + random() * 0.16);
+      ceilingMesh.setColorAt(i, tintColor);
     }
-    ferns.instanceMatrix.needsUpdate = true;
-    scene.add(ferns);
+    ceilingMesh.instanceMatrix.needsUpdate = true;
+    ceilingGroup.add(ceilingMesh);
+    scene.add(ceilingGroup);
 
-    // Rochers des inselbergs.
+    // --- Sous-bois -----------------------------------------------------
+    const bigleafMaterial = foliageMaterial(TEXTURES.bigleaf, { sway: 0.05, alphaTest: 0.4 });
+    const fernMaterial = foliageMaterial(TEXTURES.fern, { sway: 0.04, alphaTest: 0.38 });
+
+    const bigleafMesh = new THREE.InstancedMesh(
+      cardGeometry,
+      bigleafMaterial,
+      understory.filter((p) => p.variant === 1).length,
+    );
+    const fernMesh = new THREE.InstancedMesh(
+      cardGeometry,
+      fernMaterial,
+      understory.filter((p) => p.variant !== 1).length,
+    );
+    const bushMesh = new THREE.InstancedMesh(
+      cardGeometry,
+      foliageMaterial(TEXTURES.foliage, { tint: 0xb9c9a8, sway: 0.1, alphaTest: 0.44 }),
+      understory.filter((p) => p.variant === 2).length,
+    );
+
+    let bigleafIndex = 0;
+    let fernIndex = 0;
+    let bushIndex = 0;
+    for (const plant of understory) {
+      const height = plant.variant === 1 ? 1.05 : plant.variant === 2 ? 1.3 : 0.8;
+      dummy.position.set(plant.x, plant.y + height * 0.5 * plant.scale, plant.z);
+      dummy.rotation.set(0, plant.rotation, 0);
+      dummy.scale.set(plant.scale * (plant.variant === 1 ? 1.9 : 1.35), plant.scale * height * 1.6, 1);
+      dummy.updateMatrix();
+
+      if (plant.variant === 1 && bigleafIndex < bigleafMesh.count) {
+        bigleafMesh.setMatrixAt(bigleafIndex++, dummy.matrix);
+      } else if (plant.variant === 2 && bushIndex < bushMesh.count) {
+        bushMesh.setMatrixAt(bushIndex++, dummy.matrix);
+      } else if (fernIndex < fernMesh.count) {
+        fernMesh.setMatrixAt(fernIndex++, dummy.matrix);
+      }
+    }
+    bigleafMesh.count = bigleafIndex;
+    fernMesh.count = fernIndex;
+    bushMesh.count = bushIndex;
+    for (const mesh of [bigleafMesh, fernMesh, bushMesh]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.receiveShadow = true;
+      mesh.castShadow = false;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+    }
+
+    // --- Troncs tombés --------------------------------------------------
+    const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
+    const logMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3b2d1f,
+      roughness: 0.95,
+    });
+    loadTexture(TEXTURES.bark, (texture) => {
+      texture.repeat.set(1, 2);
+      logMaterial.map = texture;
+      logMaterial.needsUpdate = true;
+    });
+    const logMesh = new THREE.InstancedMesh(logGeometry, logMaterial, logs.length);
+    logs.forEach((log, index) => {
+      dummy.position.set(log.x, log.y, log.z);
+      dummy.rotation.set(Math.PI / 2 + log.tilt, log.rotation, 0);
+      dummy.scale.set(log.radius, log.length, log.radius);
+      dummy.updateMatrix();
+      logMesh.setMatrixAt(index, dummy.matrix);
+    });
+    logMesh.instanceMatrix.needsUpdate = true;
+    logMesh.castShadow = true;
+    logMesh.receiveShadow = true;
+    scene.add(logMesh);
+
+    // --- Rochers -------------------------------------------------------
     const rockGeometry = new THREE.DodecahedronGeometry(1.1, 0);
     const rockMaterial = new THREE.MeshStandardMaterial({
       color: 0x6a6a62,
       roughness: 0.95,
       flatShading: true,
     });
-    const rocks = new THREE.InstancedMesh(rockGeometry, rockMaterial, budget.rocks);
-    for (let i = 0; i < budget.rocks; i++) {
+    loadTexture(TEXTURES.rock, (texture) => {
+      texture.repeat.set(2, 2);
+      rockMaterial.map = texture;
+      rockMaterial.color.set(0xffffff);
+      rockMaterial.needsUpdate = true;
+    });
+    const rockMesh = new THREE.InstancedMesh(rockGeometry, rockMaterial, budget.rocks);
+    let rockIndex = 0;
+    for (let i = 0; i < budget.rocks * 3 && rockIndex < budget.rocks; i++) {
       const angle = random() * Math.PI * 2;
-      const distance = 12 + Math.sqrt(random()) * 190;
+      const distance = 8 + Math.sqrt(random()) * 190;
       const x = Math.cos(angle) * distance;
       const z = Math.sin(angle) * distance;
-      dummy.position.set(x, terrainHeight(x, z) + random() * 0.25, z);
+      if (random() > 0.35) continue;
+      dummy.position.set(x, terrainHeight(x, z) + random() * 0.2, z);
       dummy.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
-      dummy.scale.setScalar(0.5 + random() * 1.8);
+      dummy.scale.setScalar(0.4 + random() * 1.5);
       dummy.updateMatrix();
-      rocks.setMatrixAt(i, dummy.matrix);
+      rockMesh.setMatrixAt(rockIndex++, dummy.matrix);
     }
-    rocks.instanceMatrix.needsUpdate = true;
-    rocks.castShadow = true;
-    rocks.receiveShadow = true;
-    scene.add(rocks);
+    rockMesh.count = rockIndex;
+    rockMesh.instanceMatrix.needsUpdate = true;
+    rockMesh.castShadow = true;
+    rockMesh.receiveShadow = true;
+    scene.add(rockMesh);
+
+    // ------------------------------------------------------------------
+    // Rais de lumière
+    // ------------------------------------------------------------------
+    const shaftTexture = makeShaftTexture();
+    const shafts: THREE.Sprite[] = [];
+    for (let i = 0; i < budget.shafts; i++) {
+      const material = new THREE.SpriteMaterial({
+        map: shaftTexture,
+        transparent: true,
+        opacity: 0.28,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        color: 0xffe9b0,
+      });
+      const sprite = new THREE.Sprite(material);
+      const angle = (i / budget.shafts) * Math.PI * 2 + random();
+      const distance = 6 + random() * 34;
+      sprite.userData.offset = [Math.cos(angle) * distance, Math.sin(angle) * distance];
+      sprite.userData.baseOpacity = 0.12 + random() * 0.22;
+      sprite.position.set(0, 16, 0);
+      sprite.scale.set(3 + random() * 5, 26 + random() * 10, 1);
+      shafts.push(sprite);
+      scene.add(sprite);
+    }
 
     // ------------------------------------------------------------------
     // Eau
     // ------------------------------------------------------------------
     const waterMeshes: { mesh: THREE.Mesh; body: (typeof WATER_BODIES)[number] }[] = [];
     for (const body of WATER_BODIES) {
-      const geometry = new THREE.PlaneGeometry(body.width, body.depth, 24, 24);
+      const geometry = new THREE.PlaneGeometry(body.width, body.depth, 20, 20);
       geometry.rotateX(-Math.PI / 2);
       const material = new THREE.MeshStandardMaterial({
         color: body.color,
         transparent: true,
         opacity: body.opacity,
-        roughness: 0.15,
-        metalness: 0.35,
-        envMapIntensity: 0.8,
+        roughness: 0.12,
+        metalness: 0.4,
+      });
+      loadTexture(TEXTURES.waterNormal, (texture) => {
+        texture.repeat.set(body.width / 8, body.depth / 8);
+        material.normalMap = texture;
+        material.normalScale.set(0.5, 0.5);
+        material.needsUpdate = true;
       });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(body.center[0], body.level, body.center[1]);
@@ -396,9 +655,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     }
 
     // ------------------------------------------------------------------
-    // Pluie et lucioles (Points)
+    // Pluie et lucioles
     // ------------------------------------------------------------------
-    const rainCount = 2600;
+    const rainCount = isMobile ? 1400 : 2600;
     const rainPositions = new Float32Array(rainCount * 3);
     for (let i = 0; i < rainCount; i++) {
       rainPositions[i * 3] = (random() - 0.5) * 90;
@@ -409,7 +668,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     rainGeometry.setAttribute("position", new THREE.BufferAttribute(rainPositions, 3));
     const rainMaterial = new THREE.PointsMaterial({
       color: 0xb8d6e0,
-      size: 0.09,
+      size: 0.08,
       transparent: true,
       opacity: 0,
       depthWrite: false,
@@ -418,18 +677,18 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     rain.visible = false;
     scene.add(rain);
 
-    const fireflyCount = 320;
+    const fireflyCount = isMobile ? 160 : 320;
     const fireflyPositions = new Float32Array(fireflyCount * 3);
     for (let i = 0; i < fireflyCount; i++) {
       fireflyPositions[i * 3] = (random() - 0.5) * 80;
-      fireflyPositions[i * 3 + 1] = 0.4 + random() * 3.4;
+      fireflyPositions[i * 3 + 1] = 0.4 + random() * 2.6;
       fireflyPositions[i * 3 + 2] = (random() - 0.5) * 80;
     }
     const fireflyGeometry = new THREE.BufferGeometry();
     fireflyGeometry.setAttribute("position", new THREE.BufferAttribute(fireflyPositions, 3));
     const fireflyMaterial = new THREE.PointsMaterial({
       color: 0xd8ff8a,
-      size: 0.16,
+      size: 0.14,
       transparent: true,
       opacity: 0,
       depthWrite: false,
@@ -439,20 +698,21 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     scene.add(fireflies);
 
     // ------------------------------------------------------------------
-    // Marqueurs des zones (balises lumineuses)
+    // Balises de zone (repères de navigation)
     // ------------------------------------------------------------------
     const zoneMarkers: THREE.Mesh[] = [];
     for (const zone of ZONES) {
       const marker = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.35, 0.35, 5, 6, 1, true),
+        new THREE.CylinderGeometry(0.3, 0.3, 4.5, 6, 1, true),
         new THREE.MeshBasicMaterial({
-          color: zone.id === "camp" ? 0xf2b544 : 0x6f9f5e,
+          color: zone.id === "camp" ? 0xf2b544 : 0x8fc47a,
           transparent: true,
-          opacity: 0.35,
+          opacity: 0.22,
           side: THREE.DoubleSide,
+          depthWrite: false,
         }),
       );
-      marker.position.set(zone.center[0], 2.5, zone.center[1]);
+      marker.position.set(zone.center[0], 2.2, zone.center[1]);
       marker.visible = zone.unlockedByDefault;
       scene.add(marker);
       zoneMarkers.push(marker);
@@ -464,27 +724,6 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     const remoteGroup = new THREE.Group();
     scene.add(remoteGroup);
     const remoteMeshes = new Map<string, THREE.Group>();
-
-    const makeRemoteAvatar = (name: string) => {
-      const group = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.32, 1.05, 4, 8),
-        new THREE.MeshStandardMaterial({ color: 0x8fd0c2, roughness: 0.7 }),
-      );
-      body.position.y = 0.95;
-      body.castShadow = true;
-      group.add(body);
-      const head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.22, 12, 10),
-        new THREE.MeshStandardMaterial({ color: 0xe8d3ae, roughness: 0.8 }),
-      );
-      head.position.y = 1.78;
-      group.add(head);
-      const label = makeLabel(name);
-      label.position.y = 2.25;
-      group.add(label);
-      return group;
-    };
 
     const makeLabel = (text: string) => {
       const canvas = document.createElement("canvas");
@@ -509,8 +748,29 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       return sprite;
     };
 
+    const makeRemoteAvatar = (name: string) => {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.32, 1.05, 4, 8),
+        new THREE.MeshStandardMaterial({ color: 0x8fd0c2, roughness: 0.7 }),
+      );
+      body.position.y = 0.95;
+      body.castShadow = true;
+      group.add(body);
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.22, 12, 10),
+        new THREE.MeshStandardMaterial({ color: 0xe8d3ae, roughness: 0.8 }),
+      );
+      head.position.y = 1.78;
+      group.add(head);
+      const label = makeLabel(name);
+      label.position.y = 2.25;
+      group.add(label);
+      return group;
+    };
+
     // ------------------------------------------------------------------
-    // Caméra libre à la souris
+    // Caméra libre
     // ------------------------------------------------------------------
     let yaw = Math.PI;
     let pitch = 0;
@@ -527,13 +787,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         pitch = Math.max(-1.1, Math.min(1.0, pitch - event.movementY * 0.003));
       }
     };
-
     const onPointerDown = () => {
       if (!pointerLocked && renderer.domElement.requestPointerLock) {
         renderer.domElement.requestPointerLock();
       }
     };
-
     const onPointerLockChange = () => {
       pointerLocked = document.pointerLockElement === renderer.domElement;
     };
@@ -567,6 +825,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     let targetHeading = Math.PI;
     let bob = 0;
     let currentMotion = "idle";
+    let daylight = 1;
 
     const animate = () => {
       raf = requestAnimationFrame(animate);
@@ -575,16 +834,15 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       last = now;
       if (paused) return;
       elapsed += dt;
+      sharedTime.value = elapsed;
 
-      // Position de la caméra (avec léger balancement à la marche).
+      // Caméra : hauteur d'œil + ressenti de marche.
       const moving = currentMotion === "walk" || currentMotion === "run" || currentMotion === "sneak";
       bob += dt * (currentMotion === "run" ? 11 : 6);
       const bobAmplitude = moving ? (currentMotion === "run" ? 0.075 : 0.035) : 0;
       const sway = moving ? Math.sin(bob * 0.5) * 0.012 : 0;
 
-      // La caméra suit le relief : sans cela, elle s'enfonce dans le sol dès
-      // que le terrain monte (le joueur marcherait « sous » la forêt).
-      const eyeHeight = SCENE_CONFIG.camera.height * 0.8;
+      const eyeHeight = 1.62;
       const groundUnderPlayer = terrainHeight(playerPosition.x, playerPosition.z);
       camera.position.set(
         playerPosition.x + sway,
@@ -592,31 +850,30 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         playerPosition.z,
       );
 
-      // La caméra suit le cap du joueur, modulé par la souris.
       const targetYaw = targetHeading + yaw - Math.PI;
       camera.rotation.order = "YXZ";
       camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.18);
       camera.rotation.x = pitch;
       camera.rotation.z = Math.sin(bob * 0.5) * 0.004;
 
-      // Vagues de l'eau.
-      for (const { mesh, body } of waterMeshes) {
+      // Vagues.
+      for (const { mesh } of waterMeshes) {
         const positions = mesh.geometry.attributes.position as THREE.BufferAttribute;
         for (let i = 0; i < positions.count; i++) {
           const x = positions.getX(i);
           const z = positions.getZ(i);
-          const wave =
-            Math.sin(x * 0.22 + elapsed * 1.1 + body.current) * 0.05 +
-            Math.cos(z * 0.3 - elapsed * 0.9) * 0.04;
-          positions.setY(i, wave);
+          positions.setY(
+            i,
+            Math.sin(x * 0.22 + elapsed * 1.1) * 0.05 + Math.cos(z * 0.3 - elapsed * 0.9) * 0.04,
+          );
         }
         positions.needsUpdate = true;
       }
 
-      // Pluie : chute verticale autour de la caméra.
+      // Pluie.
       if (rain.visible) {
         const positions = rain.geometry.attributes.position as THREE.BufferAttribute;
-        const speed = 24 * dt;
+        const speed = 26 * dt;
         for (let i = 0; i < positions.count; i++) {
           let y = positions.getY(i) - speed;
           if (y < 0) {
@@ -629,22 +886,30 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         positions.needsUpdate = true;
       }
 
-      // Lucioles : scintillement et dérive.
+      // Lucioles.
       if (fireflies.visible) {
         fireflyMaterial.opacity = 0.55 + Math.sin(elapsed * 1.6) * 0.18;
         fireflies.rotation.y = elapsed * 0.006;
       }
 
-      // Les joueurs distants flottent légèrement (respiration).
-      for (const group of remoteMeshes.values()) {
-        group.position.y = Math.sin(elapsed * 1.6 + group.position.x) * 0.02;
+      // Rais de lumière : ils suivent le joueur et respirent doucement.
+      for (const shaft of shafts) {
+        const [ox, oz] = shaft.userData.offset as [number, number];
+        const drift = Math.sin(elapsed * 0.15 + ox) * 0.6;
+        shaft.position.set(camera.position.x + ox + drift, 15, camera.position.z + oz);
+        const material = shaft.material as THREE.SpriteMaterial;
+        material.opacity =
+          (shaft.userData.baseOpacity as number) *
+          daylight *
+          (0.75 + Math.sin(elapsed * 0.6 + oz) * 0.25);
+        shaft.visible = daylight > 0.35;
       }
 
-      // Le soleil suit le joueur pour garder des ombres nettes.
+      // Le soleil suit le joueur (ombres nettes autour de la caméra).
       sun.position.set(
-        camera.position.x + SCENE_CONFIG.lighting.sun.position.x,
-        SCENE_CONFIG.lighting.sun.position.y,
-        camera.position.z + SCENE_CONFIG.lighting.sun.position.z,
+        camera.position.x + 46,
+        96,
+        camera.position.z + 34,
       );
       sun.target.position.set(camera.position.x, 0, camera.position.z);
       sun.target.updateMatrixWorld();
@@ -659,52 +924,44 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         targetHeading = heading;
         currentMotion = motion;
       },
-      setEnvironment({ hour, daylight, weather, intensity = 0.6 }) {
-        const night = daylight < 0.25;
-        const fogColour = new THREE.Color(
-          night ? FOREST_PALETTE.fogNight : FOREST_PALETTE.fogDay,
-        );
-        (scene.fog as THREE.Fog).color.lerp(fogColour, 0.1);
-        (scene.fog as THREE.Fog).near = 14 + daylight * 22;
-        (scene.fog as THREE.Fog).far = 90 + daylight * 190;
+      setEnvironment({ daylight: value, weather, intensity = 0.6 }) {
+        daylight = value;
+        const night = value < 0.25;
+        const wet = weather === "pluie" || weather === "orage";
+
+        // Brouillard : court et vert au sol, il donne la profondeur de la forêt.
+        const fog = scene.fog as THREE.Fog;
+        const fogColour = new THREE.Color(night ? FOREST_PALETTE.fogNight : FOREST_PALETTE.fogDay);
+        if (wet) fogColour.lerp(new THREE.Color(0x6b7d6d), 0.4);
+        fog.color.lerp(fogColour, 0.1);
+
+        const weatherFactor = weather === "brume" ? 0.45 : wet ? 0.7 : 1;
+        fog.near = THREE.MathUtils.lerp(fog.near, (6 + value * 10) * weatherFactor, 0.08);
+        fog.far = THREE.MathUtils.lerp(fog.far, (55 + value * 90) * weatherFactor, 0.08);
 
         const sky = new THREE.Color(
-          daylight > 0.55
-            ? FOREST_PALETTE.skyDay
-            : daylight > 0.15
-              ? FOREST_PALETTE.skyDusk
-              : FOREST_PALETTE.skyNight,
+          value > 0.55 ? FOREST_PALETTE.skyDay : value > 0.15 ? FOREST_PALETTE.skyDusk : FOREST_PALETTE.skyNight,
         );
-        if (scene.background instanceof THREE.Color) {
-          scene.background.lerp(sky, 0.08);
-        }
+        if (scene.background instanceof THREE.Color) scene.background.lerp(sky, 0.08);
 
-        sun.intensity = 0.08 + daylight * 2.0;
-        ambient.intensity = 0.12 + daylight * 0.4;
-        hemisphere.intensity = 0.2 + daylight * 0.5;
-        moon.intensity = (1 - daylight) * 0.45;
-        renderer.toneMappingExposure = 0.8 + daylight * 0.35;
+        sun.intensity = 0.04 + value * 1.6;
+        ambient.intensity = 0.18 + value * 0.32;
+        hemisphere.intensity = 0.25 + value * 0.5;
+        moon.intensity = (1 - value) * 0.5;
+        renderer.toneMappingExposure = 0.82 + value * 0.3;
 
-        const wet = weather === "pluie" || weather === "orage";
         rain.visible = wet && intensity > 0.05;
-        const params = rainParams(intensity);
-        rainMaterial.opacity = params.opacity;
+        rainMaterial.opacity = rainParams(intensity).opacity;
 
         fireflyMaterial.opacity = night && !wet ? 0.6 : 0;
         fireflies.visible = night;
 
-        // Les balises de zone s'allument la nuit.
+        // Le plafond de canopée s'assombrit avec la nuit.
+        ceilingMaterial.color.setRGB(0.55 + value * 0.35, 0.6 + value * 0.35, 0.48 + value * 0.3);
+
         for (const marker of zoneMarkers) {
           const material = marker.material as THREE.MeshBasicMaterial;
-          material.opacity = night ? 0.55 : 0.25;
-        }
-
-        // Brouillard dense : on rapproche le plan lointain.
-        if (weather === "brume") {
-          (scene.fog as THREE.Fog).far *= 0.6;
-        }
-        if (hour >= 0) {
-          /* l'heure est déjà reflétée par daylight */
+          material.opacity = night ? 0.5 : 0.2;
         }
       },
       setRemotePlayers(players) {
@@ -744,6 +1001,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       requestLook() {
         renderer.domElement.requestPointerLock?.();
       },
+      getStats() {
+        return { trees: trees.length, understory: understory.length, logs: logs.length };
+      },
       dispose() {
         cancelAnimationFrame(raf);
         observer.disconnect();
@@ -751,7 +1011,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         document.removeEventListener("pointermove", onPointerMove);
         document.removeEventListener("pointerlockchange", onPointerLockChange);
         scene.traverse((object) => {
-          if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
+          if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.Sprite) {
             object.geometry?.dispose();
             const material = object.material;
             if (Array.isArray(material)) material.forEach((m) => m.dispose());
@@ -759,6 +1019,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           }
         });
         textures.forEach((texture) => texture.dispose());
+        shaftTexture.dispose();
         renderer.dispose();
         if (renderer.domElement.parentElement === mount) {
           mount.removeChild(renderer.domElement);
@@ -779,6 +1040,18 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
   return (
     <div className={`relative h-full w-full overflow-hidden ${className}`}>
       <div ref={mountRef} className="absolute inset-0" />
+
+      {/* Vignettage : concentre le regard, renforce l'ambiance sous-bois. */}
+      {!unsupported && (
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse at 50% 46%, transparent 42%, rgba(4,12,8,0.34) 78%, rgba(3,9,6,0.62) 100%)",
+          }}
+        />
+      )}
+
       {unsupported && (
         <div className="absolute inset-0 grid place-items-center bg-canopy-900/90 p-6 text-center">
           <div className="max-w-sm space-y-2">

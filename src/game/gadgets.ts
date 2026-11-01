@@ -188,8 +188,13 @@ export function initialGadgets(progress: string[]): GadgetState[] {
   }));
 }
 
-/** Consomme un gadget et renvoie l'état mis à jour, ou null si indisponible. */
-export function useGadget(
+/**
+ * Consomme un gadget et renvoie l'état mis à jour, ou null si indisponible.
+ *
+ * Nommée `consumeGadget` et non `useGadget` : le préfixe `use` ferait passer
+ * cette fonction pure pour un hook React (règle react-hooks/rules-of-hooks).
+ */
+export function consumeGadget(
   state: GadgetState,
   seconds: number,
 ): GadgetState | null {

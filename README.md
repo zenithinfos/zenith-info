@@ -30,6 +30,7 @@ sauvegardes, salons et paiements fonctionnent en mémoire (perdus au redémarrag
 | `npm run lint` | ESLint (config Next) |
 | `npm run assets` | Régénère `public/` (icônes, visuels, textures, GLB, WAV) |
 | `npm run package` | Fabrique `public/downloads/minkebe-server-<version>.zip` |
+| `npm run check:forest` | Mesure la densité de la forêt (ciel visible, placement) |
 | `npm run db:push` | Applique le schéma Drizzle à PostgreSQL |
 
 ---
@@ -143,11 +144,50 @@ vérifiez `GET /api/health`.
 
 ---
 
+## Rendu de la forêt
+
+La forêt est générée par des modules purs, testables sans navigateur :
+
+| Module | Rôle |
+|---|---|
+| `src/game/terrain.ts` | Relief, cuvettes des plans d'eau, pentes, distance aux rives |
+| `src/game/forest.ts` | Placement des trois strates (canopée, sous-bois, sol) et forme des houppiers |
+
+Principes de rendu :
+
+- **Trois strates** : canopée (émergents 20–29 m, arbres moyens 10–17 m, jeunes
+  5–10 m), sous-bois (balisiers, buissons, fougères) et sol (litière, troncs tombés).
+- **Houppiers en volume** : cartes de feuillage empilées sur les deux tiers
+  supérieurs du fût, plus une carte horizontale en « toit ». Une couronne n'est
+  jamais un disque posé sur un mât.
+- **Feuillages alpha-testés** : silhouettes découpées, et Three projette de
+  vraies ombres feuillues (le depth material reprend `alphaTest`).
+- **Plafond de canopée** + brouillard : on ne voit jamais le ciel depuis le
+  sentier, sauf dans les baïs — vérifié par `npm run check:forest`.
+- **Vent** : léger balancement dans le vertex shader, avec une clé de cache de
+  programme par matériau.
+- Sol assombri sous la canopée dense (couleurs par sommet), rais de lumière
+  additifs, vignettage.
+
+Densités mesurées (desktop, 4 200 arbres) :
+
+| Sonde | Ciel visible |
+|---|---|
+| Camp de base | 13 % |
+| Sentier | 2 % |
+| Forêt profonde | 0 % |
+| Baï (clairière) | 53 % |
+| Colline | 0,4 % |
+
 ## Assets
 
-Tout `public/` est généré par `scripts/gen-assets.mjs` (sharp + SVG + un
-écrivain GLB/WAV maison) : icônes PWA, visuels de menu, textures, deux modèles
-low-poly et trois pistes audio (~4,4 Mo).
+Tout `public/` est généré par `scripts/gen-assets.mjs` (+ `scripts/lib/textures.mjs`)
+— sharp, SVG et un écrivain GLB/WAV maison : icônes PWA, visuels de menu,
+textures de forêt, deux modèles low-poly et trois pistes audio.
+
+Les textures de forêt sont dessinées feuille par feuille (bouquets, fougères,
+balisiers, canopée percée de trous de lumière, écorce, litière) puis quantifiées
+en palette : **~400 Ko au total** pour onze textures.
 
 Remplacez ces fichiers par vos propres créations **en conservant les noms** :
 `public/models/Michelle.glb`, `public/models/Soldier.glb`,

@@ -121,27 +121,76 @@ export const TEXTURES = {
   bigleaf: "/textures/bigleaf.png",
   fern: "/textures/fern.png",
   foliage: "/textures/foliage.png",
+  foliageDeep: "/textures/foliage-deep.png",
+  foliagePale: "/textures/foliage-pale.png",
+  canopy: "/textures/canopy.png",
+  mist: "/textures/mist.png",
   rock: "/textures/rock.jpg",
   waterNormal: "/textures/water_normal.jpg",
 } as const;
 
-/** Budgets de rendu selon la plateforme détectée. */
+/**
+ * Budgets de rendu.
+ *
+ * `trees` compte les arbres de canopée (chacun porte plusieurs cartes de
+ * feuillage) ; `understory` les bouquets de sous-bois. La densité visée est
+ * celle d'une forêt de terre ferme du bassin du Congo : on ne voit jamais le
+ * ciel depuis le sentier, sauf dans les bais.
+ */
 export function qualityBudget(
   isMobile: boolean,
   reducedMotion: boolean,
 ): {
   trees: number;
+  understory: number;
   ferns: number;
   rocks: number;
+  logs: number;
   birds: number;
+  shafts: number;
   shadowMapSize: number;
   pixelRatio: number;
 } {
   if (reducedMotion) {
-    return { trees: 120, ferns: 200, rocks: 30, birds: 4, shadowMapSize: 512, pixelRatio: 1 };
+    return {
+      trees: 900,
+      understory: 500,
+      ferns: 600,
+      rocks: 40,
+      logs: 20,
+      birds: 4,
+      shafts: 6,
+      shadowMapSize: 512,
+      pixelRatio: 1,
+    };
   }
   if (isMobile) {
-    return { trees: 260, ferns: 420, rocks: 55, birds: 6, shadowMapSize: 1024, pixelRatio: 1.5 };
+    return {
+      trees: 1700,
+      understory: 900,
+      ferns: 1000,
+      rocks: 70,
+      logs: 40,
+      birds: 6,
+      shafts: 12,
+      shadowMapSize: 1024,
+      pixelRatio: 1.5,
+    };
   }
-  return { trees: 620, ferns: 900, rocks: 110, birds: 12, shadowMapSize: 2048, pixelRatio: 1.75 };
+  return {
+    trees: 4200,
+    understory: 2200,
+    ferns: 1800,
+    rocks: 160,
+    logs: 90,
+    birds: 12,
+    shafts: 22,
+    shadowMapSize: 2048,
+    pixelRatio: 1.75,
+  };
 }
+
+/** Teintes des cartes de feuillage, pour varier la forêt sans nouvelles textures. */
+export const FOLIAGE_TINTS = [
+  0x6f9a58, 0x5c8a4c, 0x4e7a44, 0x7aa35f, 0x466e3e, 0x8ab06a,
+] as const;

@@ -12,7 +12,8 @@
     "assets": "node scripts/gen-assets.mjs",
     "package": "node scripts/package-downloads.mjs",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "check:forest": "node scripts/check-forest.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.4",
