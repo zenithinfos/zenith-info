@@ -14,7 +14,7 @@
  */
 
 import { build } from "esbuild";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -30,6 +30,7 @@ const getArg = (name, fallback) => {
 };
 
 const OUT_DIR = getArg("out", "/tmp");
+await mkdir(OUT_DIR, { recursive: true });
 const [WIDTH, HEIGHT] = getArg("size", "640x360").split("x").map(Number);
 /** Rayon (en unités) de végétation générée autour du centre de l'image. */
 const VIEW_RADIUS = Number(getArg("radius", "70"));
