@@ -224,10 +224,20 @@ check("aucune matrice NaN", finite, "40 images par allure");
 // ---------------------------------------------------------------------------
 // Rendu logiciel
 // ---------------------------------------------------------------------------
+const panels = [
+  { label: "face", pose: { aiming: false }, camera: [0.2, 1.3, -4.1], target: [0, 0.95, 0] },
+  { label: "trois quarts", pose: { motion: "walk", speed: 2.1, frames: 34 }, camera: [2.0, 1.3, -3.4], target: [0, 0.95, 0] },
+  { label: "dos", pose: { motion: "run", speed: 4.4, frames: 22 }, camera: [0.6, 1.4, 3.9], target: [0, 1.0, 0] },
+  { label: "profil, en joue", pose: { aiming: true, aimPitch: -0.03, frames: 40 }, camera: [-2.9, 1.35, -2.2], target: [0, 1.2, -0.25] },
+  { label: "profil", pose: { aiming: false }, camera: [-3.9, 1.25, 0.3], target: [0, 0.95, 0] },
+  // Portrait : à trois mètres, une tête fait quarante pixels. Sans ce plan,
+  // on juge le visage sans le voir.
+  { label: "visage", pose: { aiming: false }, camera: [0.16, 1.72, -0.92], target: [0, 1.61, 0] },
+];
 const PANEL_W = 300;
 const PANEL_H = 430;
 const SS = 2;
-const W = PANEL_W * 5 * SS;
+const W = PANEL_W * panels.length * SS;
 const H = PANEL_H * SS;
 const buffer = new Float32Array(W * H * 3);
 
@@ -268,22 +278,42 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
     const position = geometry.attributes.position;
     const index = geometry.index;
     const count = index ? index.count : position.count;
-    const colour = (child.material.color ?? new THREE.Color(0.7, 0.7, 0.7)).clone();
+    // Hors navigateur, aucune texture n'est chargée : la couleur du matériau
+    // peut être blanche (elle multiplie la carte d'albédo dans le jeu). On
+    // peint donc avec la teinte de référence, `userData.swatch`.
+    const colour = (
+      child.material.userData?.swatch ??
+      child.material.color ??
+      new THREE.Color(0.7, 0.7, 0.7)
+    ).clone();
     const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
     const screen = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    const normals = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    const normalsAttr = geometry.attributes.normal;
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(child.matrixWorld);
 
     for (let i = 0; i < count; i += 3) {
       for (let k = 0; k < 3; k++) {
         const at = index ? index.getX(i + k) : i + k;
         v[k].fromBufferAttribute(position, at).applyMatrix4(child.matrixWorld);
         screen[k].copy(v[k]).project(camera);
+        if (normalsAttr) {
+          normals[k].fromBufferAttribute(normalsAttr, at).applyMatrix3(normalMatrix).normalize();
+        }
       }
       if (screen.some((p) => p.z < -1 || p.z > 1)) continue;
-      const normal = new THREE.Vector3()
+
+      // Ombrage lissé : on interpole la normale aux sommets, comme le fait le
+      // GPU. Un rendu à facettes (une normale par triangle) fait passer un
+      // maillage correct pour un mannequin de bois — c'était le cas avant.
+      const flat = new THREE.Vector3()
         .subVectors(v[1], v[0])
         .cross(new THREE.Vector3().subVectors(v[2], v[0]));
-      if (normal.lengthSq() < 1e-12) continue;
-      normal.normalize();
+      if (flat.lengthSq() < 1e-14) continue;
+      if (!normalsAttr) {
+        flat.normalize();
+        for (const n of normals) n.copy(flat);
+      }
       triangles.push({
         points: screen.map((p) => [
           offsetX + (p.x * 0.5 + 0.5) * PANEL_W * SS,
@@ -291,7 +321,7 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
         ]),
         depth: (screen[0].z + screen[1].z + screen[2].z) / 3,
         colour,
-        shade: 0.28 + 0.72 * Math.abs(normal.dot(light)),
+        normals: normals.map((n) => n.clone()),
       });
     }
   });
@@ -315,7 +345,14 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
         const w2 = 1 - w0 - w1;
         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
         const i = (y * W + x) * 3;
-        const s = triangle.shade;
+        // Normale interpolée, puis Lambert adouci + un filet de lumière
+        // ambiante colorée : c'est ce qui donne du volume à un bras.
+        const nx = triangle.normals[0].x * w0 + triangle.normals[1].x * w1 + triangle.normals[2].x * w2;
+        const ny = triangle.normals[0].y * w0 + triangle.normals[1].y * w1 + triangle.normals[2].y * w2;
+        const nz = triangle.normals[0].z * w0 + triangle.normals[1].z * w1 + triangle.normals[2].z * w2;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        const lambert = Math.abs((nx * light.x + ny * light.y + nz * light.z) / len);
+        const s = 0.2 + 0.8 * Math.pow(lambert, 0.9);
         buffer[i] = buffer[i] * 0.15 + triangle.colour.r * s * 0.85;
         buffer[i + 1] = buffer[i + 1] * 0.15 + triangle.colour.g * s * 0.85;
         buffer[i + 2] = buffer[i + 2] * 0.15 + triangle.colour.b * s * 0.85;
@@ -324,13 +361,7 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
   }
 }
 
-const panels = [
-  { label: "face", pose: { aiming: false }, camera: [0.2, 1.3, -4.1], target: [0, 0.95, 0] },
-  { label: "trois quarts", pose: { motion: "walk", speed: 2.1, frames: 34 }, camera: [2.0, 1.3, -3.4], target: [0, 0.95, 0] },
-  { label: "dos", pose: { motion: "run", speed: 4.4, frames: 22 }, camera: [0.6, 1.4, 3.9], target: [0, 1.0, 0] },
-  { label: "profil, en joue", pose: { aiming: true, aimPitch: -0.03, frames: 40 }, camera: [-2.9, 1.35, -2.2], target: [0, 1.2, -0.25] },
-  { label: "profil", pose: { aiming: false }, camera: [-3.9, 1.25, 0.3], target: [0, 0.95, 0] },
-];
+
 
 // On remet les compteurs à zéro pour des poses reproductibles.
 for (let i = 0; i < panels.length; i++) {

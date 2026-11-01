@@ -48,8 +48,46 @@ import {
   poseHuman,
   setHumanWeapon,
   type HumanMotion,
+  type HumanPose,
   type HumanRig,
 } from "./HumanModel";
+import {
+  disposeAvatar,
+  equipAvatarWeapon,
+  kickAvatarRig,
+  loadAvatarRig,
+  poseAvatar,
+  slashAvatarRig,
+  type AvatarRig,
+} from "./AvatarModel";
+
+/**
+ * Pose un personnage, quel que soit son corps.
+ *
+ * Le maillage importé et le corps procédural partagent la même interface, mais
+ * pas le même code d'animation : l'un tourne les os d'un squelette glTF,
+ * l'autre ceux d'un squelette construit à la main. Ce petit aiguillage évite
+ * de dupliquer tout le bloc de rendu pour deux implémentations.
+ */
+function poseAny(rig: HumanRig, pose: HumanPose): void {
+  if ((rig as AvatarRig).source === "gltf") poseAvatar(rig as AvatarRig, pose);
+  else poseHuman(rig, pose);
+}
+
+function equipAny(rig: HumanRig, id: WeaponId): void {
+  if ((rig as AvatarRig).source === "gltf") equipAvatarWeapon(rig as AvatarRig, id);
+  else setHumanWeapon(rig, id);
+}
+
+function kickAny(rig: HumanRig, strength: number): void {
+  if ((rig as AvatarRig).source === "gltf") kickAvatarRig(rig as AvatarRig, strength);
+  else humanKick(rig, strength);
+}
+
+function slashAny(rig: HumanRig): void {
+  if ((rig as AvatarRig).source === "gltf") slashAvatarRig(rig as AvatarRig);
+  else humanSlash(rig);
+}
 
 /**
  * Scène 3D de la réserve.
@@ -1252,10 +1290,37 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // Il n'est visible qu'à l'épaule, mais il est construit dans tous les cas :
     // basculer de vue ne doit jamais provoquer de génération d'uniformes au
     // milieu d'un mouvement.
-    const playerRig: HumanRig = createHumanRig();
+    // On démarre sur le corps procédural : il est disponible tout de suite,
+    // sans requête réseau, et le jeu est jouable même si le maillage n'arrive
+    // jamais. Le modèle importé prend sa place dès qu'il est chargé.
+    let playerRig: HumanRig = createHumanRig();
     setHumanWeapon(playerRig, "machette");
     playerRig.group.visible = false;
     scene.add(playerRig.group);
+
+    let avatarDisposed = false;
+    void loadAvatarRig()
+      .then((avatar) => {
+        if (!avatar) return;
+        if (avatarDisposed) {
+          disposeAvatar(avatar);
+          return;
+        }
+        // On reprend la position et l'orientation du corps de remplacement.
+        avatar.group.position.copy(playerRig.group.position);
+        avatar.group.rotation.copy(playerRig.group.rotation);
+        avatar.group.visible = playerRig.group.visible;
+        equipAvatarWeapon(avatar, "machette");
+        scene.remove(playerRig.group);
+        playerRig.group.traverse((child) => {
+          if (child instanceof THREE.Mesh) child.geometry.dispose();
+        });
+        scene.add(avatar.group);
+        playerRig = avatar;
+      })
+      .catch(() => {
+        /* le corps procédural reste en place */
+      });
 
     // ------------------------------------------------------------------
     // Pluie et lucioles
@@ -1578,7 +1643,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           rigYaw += wrapAngle(targetYaw - rigYaw) * Math.min(1, dt * 6);
         }
         playerRig.group.rotation.y = rigYaw;
-        poseHuman(playerRig, {
+        poseAny(playerRig, {
           dt,
           motion: (inWater ? "swim" : currentMotion) as HumanMotion,
           speed: stepLength / Math.max(dt, 1e-4),
@@ -1845,7 +1910,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       },
       setWeapon(id) {
         viewModel.setWeapon(id);
-        setHumanWeapon(playerRig, id);
+        equipAny(playerRig, id);
       },
       setAiming(value) {
         aiming = value;
@@ -1854,11 +1919,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       fireFeedback(id) {
         if (id === "couteau" || id === "machette" || id === "lance") {
           viewModel.slash();
-          humanSlash(playerRig);
+          slashAny(playerRig);
         } else {
           const strength = id === "m16" ? 0.8 : 1;
           viewModel.kick(strength);
-          humanKick(playerRig, strength);
+          kickAny(playerRig, strength);
         }
       },
       getAim() {
@@ -1926,7 +1991,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         for (const surface of waterSurfaces) surface.dispose();
         for (const [, rig] of animalRigs) disposeAnimalRig(rig);
         animalRigs.clear();
-        disposeHumanRig(playerRig);
+        avatarDisposed = true;
+        if ((playerRig as AvatarRig).source === "gltf") disposeAvatar(playerRig as AvatarRig);
+        else disposeHumanRig(playerRig);
         viewModel.dispose();
         textures.forEach((texture) => texture.dispose());
         shaftTexture.dispose();

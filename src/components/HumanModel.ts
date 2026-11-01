@@ -19,12 +19,13 @@
 
 import * as THREE from "three";
 import { type WeaponId } from "@/game/hunting";
+import { HUMAN_HOLD } from "@/game/holds";
 import { createWeaponModel, disposeWeaponModel, type WeaponModel } from "./WeaponModels";
 
 export const HUMAN_HIPS_Y = 0.95;
 export const HUMAN_EYE_Y = 1.66;
 const SHOULDER_Y = 0.2; // dans l'espace de la poitrine
-const SHOULDER_X = 0.195;
+const SHOULDER_X = 0.172;
 const UPPER_ARM = 0.3;
 const FOREARM = 0.27;
 const THIGH = 0.44;
@@ -47,17 +48,19 @@ export interface HumanPose {
 
 export interface HumanRig {
   group: THREE.Group;
-  hips: THREE.Group;
-  spine: THREE.Group;
-  chest: THREE.Group;
-  neck: THREE.Group;
-  head: THREE.Group;
-  shoulder: { left: THREE.Group; right: THREE.Group };
-  elbow: { left: THREE.Group; right: THREE.Group };
-  wrist: { left: THREE.Group; right: THREE.Group };
-  thigh: { left: THREE.Group; right: THREE.Group };
-  knee: { left: THREE.Group; right: THREE.Group };
-  ankle: { left: THREE.Group; right: THREE.Group };
+  // `Object3D` et non `Group` : un os de squelette glTF est un `Bone`, et le
+  // personnage peut être l'un ou l'autre sans que l'appelant ait à le savoir.
+  hips: THREE.Object3D;
+  spine: THREE.Object3D;
+  chest: THREE.Object3D;
+  neck: THREE.Object3D;
+  head: THREE.Object3D;
+  shoulder: { left: THREE.Object3D; right: THREE.Object3D };
+  elbow: { left: THREE.Object3D; right: THREE.Object3D };
+  wrist: { left: THREE.Object3D; right: THREE.Object3D };
+  thigh: { left: THREE.Object3D; right: THREE.Object3D };
+  knee: { left: THREE.Object3D; right: THREE.Object3D };
+  ankle: { left: THREE.Object3D; right: THREE.Object3D };
   weaponHolder: THREE.Group;
   weapon: WeaponModel | null;
   flash: THREE.Sprite;
@@ -78,18 +81,47 @@ export interface HumanRig {
 // Matières
 // ---------------------------------------------------------------------------
 
-function cloth(colour: number, roughness = 0.94): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: colour, roughness, metalness: 0 });
+/**
+ * Couleur de la matière quand sa texture n'est pas disponible.
+ *
+ * `material.color` multiplie la carte d'albédo : quand la carte est là, la
+ * couleur doit rester blanche, sinon la peau est deux fois trop sombre. Mais
+ * les outils hors navigateur (contrôles, rendus de géométrie) ne chargent
+ * aucune image et n'ont que cette couleur. On garde donc la teinte réelle dans
+ * `userData.swatch`, et c'est elle que ces outils lisent.
+ */
+function swatch(material: THREE.Material, colour: number): void {
+  material.userData.swatch = new THREE.Color(colour);
 }
 
-function leather(colour: number): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
-    color: colour,
+function cloth(
+  colour: number,
+  roughness = 0.94,
+  maps: Partial<Surface> = {},
+): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    color: maps.map ? 0xffffff : colour,
+    roughness,
+    metalness: 0,
+    ...maps,
+  });
+  material.normalScale = new THREE.Vector2(0.7, 0.7);
+  swatch(material, colour);
+  return material;
+}
+
+function leather(colour: number, maps: Partial<Surface> = {}): THREE.MeshPhysicalMaterial {
+  const material = new THREE.MeshPhysicalMaterial({
+    color: maps.map ? 0xffffff : colour,
     roughness: 0.55,
     metalness: 0.04,
     clearcoat: 0.25,
     clearcoatRoughness: 0.5,
+    ...maps,
   });
+  material.normalScale = new THREE.Vector2(0.9, 0.9);
+  swatch(material, colour);
+  return material;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,37 +140,331 @@ function mesh(
   return created;
 }
 
-/** Un membre : pivot au joint, capsule qui pend vers le bas. */
-function limb(
-  radius: number,
-  length: number,
+type Ring = {
+  /** Hauteur dans l'espace du membre. */
+  y: number;
+  /** Demi-largeur, axe X. */
+  rx: number;
+  /** Demi-profondeur, axe Z. */
+  rz: number;
+  x?: number;
+  z?: number;
+};
+
+/**
+ * Surface à sections variables.
+ *
+ * Un membre humain n'est pas un cylindre : épaule large, biceps, coude étroit,
+ * avant-bras qui regrossit. On empile donc des sections elliptiques et on les
+ * relie — c'est le geste du modeleur, et c'est ce qui distingue une jambe d'un
+ * tuyau. `power` règle la superellipse : 2 = cercle, 2,4 = torse (plus large
+ * que profond, un peu carré).
+ */
+function loftGeometry(
+  rings: Ring[],
+  options: { radial?: number; power?: number; tile?: number; smooth?: number } = {},
+): THREE.BufferGeometry {
+  const radial = options.radial ?? 18;
+  const power = options.power ?? 2;
+  const tile = options.tile ?? 0.4;
+  // `smooth` interpole des sections intermédiaires : une tête a besoin de
+  // vingt sections là où une cuisse en a six.
+  const subdiv = Math.max(0, options.smooth ?? 0);
+
+  // Rééchantillonnage par interpolation monotone des rayons : les sections
+  // ajoutées ne créent pas de facettes, elles suivent la courbe existante.
+  const dense: Ring[] = [];
+  for (let i = 0; i < rings.length - 1; i++) {
+    const a = rings[i];
+    const b = rings[i + 1];
+    dense.push(a);
+    for (let k = 1; k <= subdiv; k++) {
+      const t = k / (subdiv + 1);
+      const ease = t * t * (3 - 2 * t);
+      dense.push({
+        y: a.y + (b.y - a.y) * t,
+        rx: a.rx + (b.rx - a.rx) * ease,
+        rz: a.rz + (b.rz - a.rz) * ease,
+        x: (a.x ?? 0) + ((b.x ?? 0) - (a.x ?? 0)) * t,
+        z: (a.z ?? 0) + ((b.z ?? 0) - (a.z ?? 0)) * ease,
+      });
+    }
+  }
+  dense.push(rings[rings.length - 1]);
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (const ring of dense) {
+    const perimeter = Math.PI * (ring.rx + ring.rz);
+    for (let i = 0; i < radial; i++) {
+      const angle = (i / radial) * Math.PI * 2;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const sx = Math.sign(c) * Math.pow(Math.abs(c), 2 / power);
+      const sz = Math.sign(s) * Math.pow(Math.abs(s), 2 / power);
+      positions.push((ring.x ?? 0) + sx * ring.rx, ring.y, (ring.z ?? 0) + sz * ring.rz);
+      uvs.push((i / radial) * (perimeter / tile), ring.y / tile);
+    }
+  }
+
+  for (let r = 0; r < dense.length - 1; r++) {
+    for (let i = 0; i < radial; i++) {
+      const a = r * radial + i;
+      const b = r * radial + ((i + 1) % radial);
+      const c = (r + 1) * radial + i;
+      const d = (r + 1) * radial + ((i + 1) % radial);
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+
+  // Bouchons : sans eux, on voit l'intérieur du membre au moindre mouvement.
+  const first = dense[0];
+  const last = dense[dense.length - 1];
+  const bottomCentre = positions.length / 3;
+  positions.push(first.x ?? 0, first.y, first.z ?? 0);
+  uvs.push(0.5, first.y / tile);
+  const topCentre = positions.length / 3;
+  positions.push(last.x ?? 0, last.y, last.z ?? 0);
+  uvs.push(0.5, last.y / tile);
+  const topBase = (dense.length - 1) * radial;
+  for (let i = 0; i < radial; i++) {
+    indices.push(bottomCentre, i, (i + 1) % radial);
+    indices.push(topCentre, topBase + ((i + 1) % radial), topBase + i);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function loft(
+  rings: Ring[],
+  material: THREE.Material,
+  collect: { geometries: THREE.BufferGeometry[] },
+  options: { radial?: number; power?: number; tile?: number; smooth?: number } = {},
+): THREE.Mesh {
+  return mesh(loftGeometry(rings, options), material, collect);
+}
+
+/** Ellipsoïde : la brique de base des volumes ronds (muscles, articulations). */
+function ellipsoid(
+  rx: number,
+  ry: number,
+  rz: number,
+  material: THREE.Material,
+  collect: { geometries: THREE.BufferGeometry[] },
+  segments = 14,
+): THREE.Mesh {
+  const geometry = new THREE.SphereGeometry(1, segments, Math.max(8, Math.round(segments * 0.7)));
+  geometry.scale(rx, ry, rz);
+  return mesh(geometry, material, collect);
+}
+
+/**
+ * Jeu de cartes d'une matière (albédo, normale, rugosité), s'il existe.
+ *
+ * Les cartes sont fabriquées par `scripts/gen-avatar-textures.mjs`. Hors
+ * navigateur — contrôles, rendus de vérification — il n'y a pas de chargeur
+ * d'images : on retombe sur la couleur unie, et la géométrie reste vérifiable.
+ */
+interface Surface {
+  map: THREE.Texture;
+  normalMap: THREE.Texture;
+  roughnessMap: THREE.Texture;
+}
+
+function surface(name: string, repeat = 1): Partial<Surface> {
+  if (typeof document === "undefined") return {};
+  const loader = new THREE.TextureLoader();
+  const load = (file: string, colour: boolean) => {
+    const texture = loader.load(`/textures/avatar/${name}${file}`);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(repeat, repeat);
+    texture.anisotropy = 8;
+    if (colour) texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  };
+  return {
+    map: load(".jpg", true),
+    normalMap: load("-normal.jpg", false),
+    roughnessMap: load("-roughness.png", false),
+  };
+}
+
+/**
+ * Tête sculptée.
+ *
+ * Empiler des ellipsoïdes sur un crâne donne des boules collées : des
+ * pommettes en rustines, un nez en cône, une mâchoire qui s'arrête net. Une
+ * vraie tête est **une seule surface** dont les reliefs se fondent les uns
+ * dans les autres.
+ *
+ * On construit donc le crâne par sections — ce qui règle la silhouette : front,
+ * tempes, pommettes, mâchoire qui se resserre, menton — puis on déforme cette
+ * surface point par point par des bosses et des creux : orbites, arcade, arête
+ * du nez, lèvres, sillon du menton. C'est la version pauvre d'un sculpteur
+ * numérique, mais c'en est un : la surface reste continue, aucun trait n'a de
+ * bord.
+ */
+function sculptedHead(
   material: THREE.Material,
   collect: { geometries: THREE.BufferGeometry[] },
 ): THREE.Mesh {
-  const geometry = new THREE.CapsuleGeometry(radius, Math.max(0.01, length - radius * 2), 4, 10);
-  const created = mesh(geometry, material, collect);
-  created.position.y = -length / 2;
-  return created;
+  const rings: Ring[] = [
+    { y: -0.104, rx: 0.03, rz: 0.033, z: -0.019 },
+    { y: -0.098, rx: 0.037, rz: 0.041, z: -0.018 },
+    { y: -0.088, rx: 0.045, rz: 0.05, z: -0.016 },
+    { y: -0.074, rx: 0.052, rz: 0.058, z: -0.013 },
+    { y: -0.058, rx: 0.056, rz: 0.063, z: -0.008 },
+    { y: -0.04, rx: 0.062, rz: 0.07, z: -0.003 },
+    { y: -0.02, rx: 0.067, rz: 0.076, z: 0.001 },
+    { y: 0.0, rx: 0.0705, rz: 0.081, z: 0.005 },
+    { y: 0.02, rx: 0.0725, rz: 0.084, z: 0.008 },
+    { y: 0.04, rx: 0.0735, rz: 0.0855, z: 0.01 },
+    { y: 0.06, rx: 0.073, rz: 0.0855, z: 0.011 },
+    { y: 0.08, rx: 0.0705, rz: 0.0835, z: 0.012 },
+    { y: 0.098, rx: 0.064, rz: 0.077, z: 0.012 },
+    { y: 0.112, rx: 0.052, rz: 0.064, z: 0.012 },
+    { y: 0.121, rx: 0.034, rz: 0.044, z: 0.012 },
+    { y: 0.126, rx: 0.016, rz: 0.024, z: 0.012 },
+  ];
+
+  // Résolution : les traits du visage font trois à dix millimètres. Si les
+  // sommets sont plus espacés que ça, une bosse tombe entre deux sommets et la
+  // surface part en paquets — l'aspect « fondu » qu'on avait. Soixante
+  // sections et cinquante-six rayons donnent un pas de deux millimètres.
+  const geometry = loftGeometry(rings, {
+    radial: 56,
+    power: 2.3,
+    tile: 0.16,
+    smooth: 6,
+  });
+  const position = geometry.attributes.position;
+
+  const gauss = (d: number, radius: number) => Math.exp(-(d * d) / (radius * radius));
+
+  for (let i = 0; i < position.count; i++) {
+    let x = position.getX(i);
+    let y = position.getY(i);
+    let z = position.getZ(i);
+
+    // Normale approchée : de l'axe du visage vers l'extérieur. On pousse
+    // suivant cette direction pour que les bosses se fondent au lieu de
+    // s'empiler.
+    const nx = x / 0.074;
+    const ny = (y - 0.01) / 0.118;
+    const nz = z / 0.086;
+    const nlen = Math.hypot(nx, ny, nz) || 1;
+
+    const push = (cx: number, cy: number, cz: number, radius: number, amount: number) => {
+      const d = Math.hypot(x - cx, (y - cy) * 0.9, (z - cz) * 0.75);
+      const k = gauss(d, radius);
+      if (k < 0.002) return;
+      x += (nx / nlen) * amount * k;
+      y += (ny / nlen) * amount * k * 0.5;
+      z += (nz / nlen) * amount * k;
+    };
+
+    for (const side of [-1, 1]) {
+      // Pommette : l'appui large sous l'angle externe de l'œil.
+      push(side * 0.045, -0.012, -0.052, 0.026, 0.0062);
+      // Fossette sous la pommette : le creux qui dessine le visage.
+      push(side * 0.052, -0.044, -0.046, 0.017, -0.0034);
+      // Tempe : le creux latéral, au-dessus de la pommette.
+      push(side * 0.062, 0.042, -0.02, 0.02, -0.0045);
+      // Orbite : le globe s'enfonce, l'arcade ressort juste au-dessus.
+      push(side * 0.03, 0.015, -0.068, 0.019, -0.0058);
+      push(side * 0.03, 0.036, -0.064, 0.015, 0.0032);
+      // Aile du nez.
+      push(side * 0.013, -0.036, -0.07, 0.011, 0.0034);
+      // Coin de la bouche : la ligne s'enfonce un peu.
+      push(side * 0.019, -0.06, -0.058, 0.009, -0.002);
+    }
+
+    // Arête du nez : un bourrelet vertical dont la saillie grandit vers la
+    // pointe. Étroit — le premier essai faisait un bec qui descendait jusqu'au
+    // menton, parce que la bosse s'étalait sur toute la hauteur du visage.
+    if (z < -0.01) {
+      const ridge = gauss(x, 0.0072) * gauss(y + 0.006, 0.026);
+      z -= ridge * 0.0085;
+      const bridge = gauss(x, 0.0085) * gauss(y - 0.012, 0.018);
+      z -= bridge * 0.005;
+      const tip = gauss(Math.hypot(x * 1.35, (y + 0.032) * 1.25), 0.0125);
+      z -= tip * 0.0085;
+      // Narines : deux creux sous la pointe.
+      for (const side of [-1, 1]) {
+        z += gauss(Math.hypot((x - side * 0.0105) * 1.5, (y + 0.039) * 1.6), 0.0072) * 0.0034;
+      }
+    }
+
+    // Bouche : un pli creux entre deux lèvres en relief. Il faut le marquer
+    // franchement — une fente de deux dixièmes de millimètre ne se voit pas.
+    if (z < -0.03) {
+      z += gauss(y + 0.0605, 0.003) * gauss(x, 0.021) * 0.0045;
+      z -= gauss(y + 0.056, 0.0058) * gauss(x, 0.0215) * 0.0024;
+      z -= gauss(y + 0.068, 0.0045) * gauss(x, 0.018) * 0.0028;
+      // Sillon sous la lèvre, puis menton qui avance.
+      z += gauss(y + 0.079, 0.0042) * gauss(x, 0.014) * 0.0018;
+      push(0, -0.09, -0.044, 0.017, 0.005);
+    }
+
+    position.setXYZ(i, x, y, z);
+  }
+
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return mesh(geometry, material, collect);
 }
 
 export function createHumanRig(): HumanRig {
   const collect = { geometries: [] as THREE.BufferGeometry[] };
+  const skinMaps = surface("skin");
   const skin = new THREE.MeshPhysicalMaterial({
-    color: 0x5b3a28,
+    color: skinMaps.map ? 0xffffff : 0x8a5a42,
     roughness: 0.62,
     metalness: 0,
     sheen: 0.3,
     sheenColor: new THREE.Color(0xffcaa8),
     clearcoat: 0.08,
+    ...skinMaps,
   });
-  const shirt = cloth(0x4f5639);
-  const trousers = cloth(0x454a37, 0.96);
-  const boots = leather(0x241b13);
-  const webbing = cloth(0x565b3f, 0.9);
+  skin.normalScale = new THREE.Vector2(0.55, 0.55);
+  swatch(skin, 0x8a5a42);
+
+  const skinShade = new THREE.MeshStandardMaterial({ color: 0x4a2f21, roughness: 0.7 });
+  const shirt = cloth(0x565e3e, 0.94, surface("shirt"));
+  const shirtDark = cloth(0x3c4330, 0.95);
+  const trousers = cloth(0x4a4f3a, 0.96, surface("trousers"));
+  const trousersDark = cloth(0x373c2d, 0.97);
+  const boots = leather(0x30241b, surface("leather"));
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x14110d, roughness: 0.97 });
+  const webbing = cloth(0x5c5e46, 0.9, surface("webbing"));
   const pack = cloth(0x46442f, 0.92);
   const hat = cloth(0x6d6849, 0.95);
   const hair = cloth(0x120f0b, 0.98);
-  const materials = [skin, shirt, trousers, boots, webbing, pack, hat, hair];
+  const metal = new THREE.MeshStandardMaterial({ color: 0x6a6962, roughness: 0.42, metalness: 0.7 });
+  const materials = [
+    skin,
+    skinShade,
+    shirt,
+    shirtDark,
+    trousers,
+    trousersDark,
+    boots,
+    rubber,
+    webbing,
+    pack,
+    hat,
+    hair,
+    metal,
+  ];
 
   const group = new THREE.Group();
   group.name = "joueur";
@@ -149,236 +475,496 @@ export function createHumanRig(): HumanRig {
   hips.position.y = HUMAN_HIPS_Y;
   group.add(hips);
 
-  const pelvis = mesh(new THREE.CapsuleGeometry(0.132, 0.05, 4, 12), trousers, collect);
-  pelvis.scale.set(1, 1, 0.76);
-  pelvis.position.y = -0.02;
+  // --- Bassin ---------------------------------------------------------
+  // Un bassin se lit à sa ligne : large aux hanches, plus étroit au pubis.
+  const pelvis = loft(
+    [
+      { y: -0.13, rx: 0.104, rz: 0.082 },
+      { y: -0.07, rx: 0.128, rz: 0.094 },
+      { y: -0.01, rx: 0.14, rz: 0.1 },
+      { y: 0.05, rx: 0.141, rz: 0.102 },
+      { y: 0.1, rx: 0.133, rz: 0.098 },
+    ],
+    trousers,
+    collect,
+    { radial: 22, power: 2.4 },
+  );
   hips.add(pelvis);
 
-  const belt = mesh(new THREE.CylinderGeometry(0.136, 0.14, 0.05, 14, 1, true), webbing, collect);
-  belt.scale.set(1, 1, 0.78);
-  belt.position.y = 0.035;
+  const belt = loft(
+    [
+      { y: 0.02, rx: 0.146, rz: 0.106 },
+      { y: 0.035, rx: 0.15, rz: 0.109 },
+      { y: 0.055, rx: 0.146, rz: 0.106 },
+    ],
+    webbing,
+    collect,
+    { radial: 22, power: 2.4 },
+  );
   hips.add(belt);
+
+  const buckle = ellipsoid(0.026, 0.02, 0.012, metal, collect);
+  buckle.position.set(0, 0.038, -0.108);
+  hips.add(buckle);
+
+  // Deux poches de ceinture : la silhouette d'un homme équipé, pas d'un
+  // soldat de plomb.
+  for (const side of [-1, 1]) {
+    const pouch = ellipsoid(0.045, 0.055, 0.035, webbing, collect);
+    pouch.position.set(side * 0.125, 0.01, 0.028);
+    pouch.rotation.z = side * 0.12;
+    hips.add(pouch);
+  }
 
   const spine = new THREE.Group();
   spine.position.y = 0.09;
   hips.add(spine);
 
   const chest = new THREE.Group();
-  chest.position.y = 0.2;
+  chest.position.y = 0.19;
   spine.add(chest);
 
-  // Deux volumes plutôt qu'un cylindre : une taille qui se resserre, une
-  // poitrine plus large. Un seul tonneau donnait un bonhomme de bois.
-  const abdomen = mesh(new THREE.CapsuleGeometry(0.146, 0.1, 4, 14), shirt, collect);
-  abdomen.scale.set(1, 1, 0.74);
-  abdomen.position.y = -0.01;
-  chest.add(abdomen);
+  // --- Tronc ----------------------------------------------------------
+  // Une seule surface, de la taille aux trapèzes : taille resserrée, côtes qui
+  // s'ouvrent, poitrine large, épaules qui redescendent. Les sections sont des
+  // superellipses — un torse humain n'est pas rond, il est plus large que
+  // profond et un peu carré.
+  const torso = loft(
+    [
+      { y: -0.2, rx: 0.121, rz: 0.088 },
+      { y: -0.14, rx: 0.126, rz: 0.09 },
+      { y: -0.06, rx: 0.129, rz: 0.093 },
+      { y: 0.02, rx: 0.132, rz: 0.095, z: -0.002 },
+      { y: 0.1, rx: 0.144, rz: 0.102, z: -0.004 },
+      { y: 0.18, rx: 0.152, rz: 0.107, z: -0.004 },
+      { y: 0.25, rx: 0.158, rz: 0.109, z: -0.002 },
+      { y: 0.31, rx: 0.152, rz: 0.104 },
+      { y: 0.37, rx: 0.132, rz: 0.095 },
+      { y: 0.42, rx: 0.098, rz: 0.08 },
+      { y: 0.45, rx: 0.066, rz: 0.064 },
+    ],
+    shirt,
+    collect,
+    { radial: 26, power: 2.5 },
+  );
+  spine.add(torso);
 
-  const ribcage = mesh(new THREE.CapsuleGeometry(0.16, 0.1, 4, 14), shirt, collect);
-  ribcage.scale.set(1.02, 1, 0.76);
-  ribcage.position.y = 0.12;
-  chest.add(ribcage);
-
-  // Trapèzes : la pente du cou vers les épaules, ce qui manque toujours aux
-  // personnages faits de cylindres.
+  // Omoplate : un léger bombement dans le dos, sinon le dos est une planche.
   for (const side of [-1, 1]) {
-    const trap = mesh(new THREE.CapsuleGeometry(0.055, 0.1, 3, 8), shirt, collect);
-    trap.rotation.z = side * 1.15;
-    trap.position.set(side * 0.09, 0.235, 0.005);
-    chest.add(trap);
+    const blade = ellipsoid(0.055, 0.075, 0.03, shirt, collect);
+    blade.position.set(side * 0.085, 0.22, 0.096);
+    blade.rotation.y = side * 0.24;
+    spine.add(blade);
   }
 
-  // Gilet de terrain : deux poches plates, deux sangles.
-  const vest = mesh(new THREE.CapsuleGeometry(0.167, 0.03, 4, 14), webbing, collect);
-  vest.scale.set(1, 1, 0.77);
-  vest.position.y = 0.125;
-  chest.add(vest);
+  // Col de chemise.
+  const collar = loft(
+    [
+      { y: 0.43, rx: 0.062, rz: 0.06 },
+      { y: 0.455, rx: 0.068, rz: 0.065 },
+      { y: 0.475, rx: 0.06, rz: 0.058 },
+    ],
+    shirtDark,
+    collect,
+    { radial: 20, tile: 0.25 },
+  );
+  spine.add(collar);
 
+  // Gilet de terrain : deux poches plates à rabat, deux sangles, un poste
+  // radio avec son antenne — les détails qu'on voit sur un homme de dos.
   for (const side of [-1, 1]) {
-    const pocket = mesh(new THREE.BoxGeometry(0.055, 0.06, 0.016), pack, collect);
-    pocket.position.set(side * 0.066, 0.14, -0.132);
-    pocket.rotation.x = 0.08;
-    chest.add(pocket);
+    const pocket = mesh(new THREE.BoxGeometry(0.074, 0.072, 0.016), shirtDark, collect);
+    pocket.position.set(side * 0.068, 0.157, -0.104);
+    pocket.rotation.set(0.04, side * -0.22, 0);
+    spine.add(pocket);
 
-    const strap = mesh(new THREE.BoxGeometry(0.03, 0.26, 0.014), pack, collect);
-    strap.position.set(side * 0.086, 0.11, -0.133);
-    strap.rotation.x = 0.06;
-    chest.add(strap);
+    const flap = mesh(new THREE.BoxGeometry(0.076, 0.02, 0.019), webbing, collect);
+    flap.position.set(side * 0.068, 0.188, -0.104);
+    flap.rotation.set(0.04, side * -0.22, 0);
+    spine.add(flap);
+
+    // Sangle d'épaule du sac : elle passe sur le haut de l'épaule, pas sur
+    // le devant de la chemise. Deux bandes verticales sur la poitrine
+    // ressemblaient à des bretelles de salopette.
+    const strap = ellipsoid(0.017, 0.07, 0.014, webbing, collect);
+    strap.position.set(side * 0.062, 0.355, 0.01);
+    strap.rotation.x = 0.55;
+    spine.add(strap);
   }
 
-  const packGeometry = new THREE.BoxGeometry(0.235, 0.26, 0.135);
+  const radio = ellipsoid(0.032, 0.052, 0.022, pack, collect);
+  radio.position.set(-0.078, 0.32, -0.098);
+  spine.add(radio);
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.0025, 0.22, 6), metal);
+  collect.geometries.push(antenna.geometry);
+  antenna.position.set(-0.108, 0.43, -0.09);
+  antenna.rotation.z = 0.16;
+  spine.add(antenna);
+
+  // Sac à dos : cadre + poche + couchage roulé.
+  const packGeometry = new THREE.BoxGeometry(0.24, 0.3, 0.14);
   const backpack = mesh(packGeometry, pack, collect);
-  backpack.position.set(0, 0.1, 0.165);
-  backpack.rotation.x = -0.06;
-  chest.add(backpack);
+  backpack.position.set(0, 0.19, 0.175);
+  backpack.rotation.x = -0.05;
+  spine.add(backpack);
 
-  const bedroll = mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.25, 10), pack, collect);
+  const packFlap = ellipsoid(0.11, 0.05, 0.075, pack, collect);
+  packFlap.position.set(0, 0.3, 0.17);
+  spine.add(packFlap);
+
+  const bedroll = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.26, 12), pack);
+  collect.geometries.push(bedroll.geometry);
   bedroll.rotation.z = Math.PI / 2;
-  bedroll.position.set(0, -0.03, 0.175);
-  chest.add(bedroll);
+  bedroll.position.set(0, 0.02, 0.185);
+  spine.add(bedroll);
+  for (const side of [-1, 1]) {
+    const strap = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.012, 12), webbing);
+    collect.geometries.push(strap.geometry);
+    strap.rotation.z = Math.PI / 2;
+    strap.position.set(side * 0.08, 0.02, 0.185);
+    spine.add(strap);
+  }
 
-  // Épaules.
+  // --- Épaules et bras -------------------------------------------------
   const shoulder = { left: new THREE.Group(), right: new THREE.Group() };
   const elbow = { left: new THREE.Group(), right: new THREE.Group() };
   const wrist = { left: new THREE.Group(), right: new THREE.Group() };
 
-  for (const [key, sign] of [["left", -1], ["right", 1]] as const) {
+  for (const [key, sign] of [
+    ["left", -1],
+    ["right", 1],
+  ] as const) {
     const joint = shoulder[key];
     joint.position.set(sign * SHOULDER_X, SHOULDER_Y, 0);
     chest.add(joint);
 
-    const deltoid = mesh(new THREE.SphereGeometry(0.066, 12, 10), shirt, collect);
-    deltoid.scale.set(1, 1.05, 0.95);
+    // Aisselle : un volume court qui bouche l'angle entre le bras et le
+    // torse. Sans lui, on voit le fond du décor entre le bras et le flanc.
+    const armpit = ellipsoid(0.05, 0.075, 0.062, shirt, collect);
+    armpit.position.set(sign * 0.012, -0.03, 0);
+    armpit.rotation.z = sign * 0.16;
+    joint.add(armpit);
+
+    // Deltoïde : une masse ronde posée sur l'épaule, pas une bille.
+    const deltoid = ellipsoid(0.041, 0.052, 0.05, shirt, collect);
+    deltoid.position.set(sign * -0.004, -0.032, 0);
+    deltoid.rotation.z = sign * 0.3;
     joint.add(deltoid);
 
-    const upper = limb(0.053, UPPER_ARM, shirt, collect);
-    upper.position.y = -UPPER_ARM / 2;
+    // Bras : biceps, creux du coude, avant-bras qui regrossit puis s'affine.
+    const upper = loft(
+      [
+        { y: 0.0, rx: 0.045, rz: 0.048 },
+        { y: -0.05, rx: 0.05, rz: 0.054 },
+        { y: -0.1, rx: 0.052, rz: 0.056 },
+        { y: -0.17, rx: 0.047, rz: 0.05 },
+        { y: -0.24, rx: 0.042, rz: 0.044 },
+        { y: -0.3, rx: 0.039, rz: 0.041 },
+      ],
+      shirt,
+      collect,
+      { radial: 18, power: 2.2 },
+    );
     joint.add(upper);
+
+    // Manchette roulée au-dessus du coude.
+    const cuff = loft(
+      [
+        { y: -0.24, rx: 0.046, rz: 0.048 },
+        { y: -0.265, rx: 0.048, rz: 0.05 },
+        { y: -0.3, rx: 0.044, rz: 0.046 },
+      ],
+      shirtDark,
+      collect,
+      { radial: 18 },
+    );
+    joint.add(cuff);
 
     const pivot = elbow[key];
     pivot.position.y = -UPPER_ARM;
     joint.add(pivot);
 
-    const lower = limb(0.043, FOREARM, skin, collect);
-    lower.position.y = -FOREARM / 2;
+    const lower = loft(
+      [
+        { y: 0.02, rx: 0.043, rz: 0.045 },
+        { y: -0.04, rx: 0.046, rz: 0.048 },
+        { y: -0.1, rx: 0.042, rz: 0.044 },
+        { y: -0.18, rx: 0.034, rz: 0.036 },
+        { y: -0.24, rx: 0.028, rz: 0.031 },
+        { y: -0.27, rx: 0.026, rz: 0.03 },
+      ],
+      skin,
+      collect,
+      { radial: 16, power: 2.1 },
+    );
     pivot.add(lower);
 
     const wristJoint = wrist[key];
     wristJoint.position.y = -FOREARM;
     pivot.add(wristJoint);
 
-    const hand = mesh(new THREE.BoxGeometry(0.062, 0.095, 0.042), skin, collect);
-    hand.position.set(0, -0.045, -0.008);
-    wristJoint.add(hand);
+    // Main : paume + doigts en deux phalanges repliées. Un cube avec un pouce
+    // ne ressemble à une main que de loin.
+    const palm = ellipsoid(0.036, 0.05, 0.026, skin, collect);
+    palm.position.set(0, -0.045, -0.006);
+    palm.rotation.z = sign * 0.05;
+    wristJoint.add(palm);
 
-    // Pouce et doigts fermés : le poing doit lire comme une main, pas un cube.
-    const thumb = mesh(new THREE.CapsuleGeometry(0.011, 0.035, 3, 6), skin, collect);
-    thumb.position.set(sign * 0.03, -0.045, -0.03);
-    thumb.rotation.z = sign * 0.9;
-    wristJoint.add(thumb);
+    const knuckles = ellipsoid(0.036, 0.018, 0.024, skin, collect);
+    knuckles.position.set(0, -0.082, -0.012);
+    wristJoint.add(knuckles);
 
-    for (let i = 0; i < 4; i++) {
-      const finger = mesh(new THREE.CapsuleGeometry(0.009, 0.03, 3, 6), skin, collect);
-      finger.rotation.x = Math.PI / 2;
-      finger.position.set(-sign * 0.015, -0.07 + i * 0.017, -0.035);
-      wristJoint.add(finger);
+    for (let finger = 0; finger < 4; finger++) {
+      const spread = (finger - 1.5) * 0.017;
+      const proximal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0085, 0.026, 3, 7), skin);
+      collect.geometries.push(proximal.geometry);
+      proximal.position.set(spread, -0.1, -0.018);
+      proximal.rotation.set(-0.9 + finger * 0.03, 0, sign * 0.04);
+      wristJoint.add(proximal);
+
+      const distal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0075, 0.022, 3, 7), skin);
+      collect.geometries.push(distal.geometry);
+      distal.position.set(spread, -0.118, -0.038);
+      distal.rotation.set(-1.75, 0, sign * 0.04);
+      wristJoint.add(distal);
     }
+
+    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.032, 3, 7), skin);
+    collect.geometries.push(thumb.geometry);
+    thumb.position.set(sign * 0.028, -0.062, -0.024);
+    thumb.rotation.set(-0.5, 0, sign * 1.05);
+    wristJoint.add(thumb);
   }
 
-  // Cou et tête.
+  // --- Cou et tête ------------------------------------------------------
   const neckJoint = new THREE.Group();
   neckJoint.position.y = 0.26;
   chest.add(neckJoint);
 
-  const neck = mesh(new THREE.CylinderGeometry(0.052, 0.058, 0.09, 10), skin, collect);
-  neck.position.y = 0.03;
+  const neck = loft(
+    [
+      { y: -0.02, rx: 0.056, rz: 0.058 },
+      { y: 0.03, rx: 0.05, rz: 0.052 },
+      { y: 0.08, rx: 0.049, rz: 0.05 },
+      { y: 0.1, rx: 0.053, rz: 0.055 },
+    ],
+    skin,
+    collect,
+    { radial: 16 },
+  );
   neckJoint.add(neck);
 
   const head = new THREE.Group();
   head.position.y = 0.1;
   neckJoint.add(head);
 
-  const skullGeometry = new THREE.SphereGeometry(0.098, 16, 14);
-  const skull = mesh(skullGeometry, skin, collect);
-  skull.scale.set(1, 1.14, 1.02);
-  skull.position.y = 0.02;
-  head.add(skull);
+  // --- Tête -------------------------------------------------------------
+  // Une seule surface sculptée (voir `sculptedHead`) : proportions du crâne,
+  // mâchoire resserrée, pommettes, orbites, arête du nez, lèvres, menton.
+  const headForm = sculptedHead(skin, collect);
+  head.add(headForm);
 
-  const jaw = mesh(new THREE.BoxGeometry(0.105, 0.085, 0.12), skin, collect);
-  jaw.position.set(0, -0.035, -0.022);
-  head.add(jaw);
-
-  const nose = mesh(new THREE.ConeGeometry(0.019, 0.042, 6), skin, collect);
-  nose.rotation.x = -Math.PI / 2.2;
-  nose.position.set(0, -0.005, -0.098);
-  head.add(nose);
-
+  // Ce qui reste rapporté, comme sur un vrai visage : le globe des yeux, les
+  // paupières, les sourcils, les oreilles.
   for (const side of [-1, 1]) {
-    const ear = mesh(new THREE.SphereGeometry(0.022, 8, 6), skin, collect);
-    ear.scale.set(0.55, 1, 0.8);
-    ear.position.set(side * 0.098, 0.005, 0.005);
-    head.add(ear);
+    const socketY = 0.014;
+    const socketZ = -0.069;
 
-    const eye = mesh(new THREE.SphereGeometry(0.013, 8, 6), hair, collect);
-    eye.position.set(side * 0.038, 0.022, -0.088);
-    head.add(eye);
+    const eyeball = ellipsoid(0.0122, 0.011, 0.0105, hair, collect);
+    eyeball.position.set(side * 0.0295, socketY, socketZ);
+    head.add(eyeball);
+
+    const iris = ellipsoid(0.0044, 0.0048, 0.0035, skin, collect);
+    iris.position.set(side * 0.0305, socketY - 0.0005, socketZ - 0.0092);
+    head.add(iris);
+
+    // Paupières : deux voiles de peau qui coupent le globe. C'est ce qui fait
+    // qu'un œil regarde au lieu de briller.
+    const upperLid = ellipsoid(0.0145, 0.0075, 0.0118, skin, collect);
+    upperLid.position.set(side * 0.0295, socketY + 0.0072, socketZ + 0.0018);
+    upperLid.rotation.z = side * -0.14;
+    head.add(upperLid);
+
+    const lowerLid = ellipsoid(0.0135, 0.0048, 0.0112, skin, collect);
+    lowerLid.position.set(side * 0.0295, socketY - 0.0078, socketZ + 0.002);
+    head.add(lowerLid);
+
+    // Sourcil : un arc de poils, fin, posé sur l'arcade.
+    const eyebrow = ellipsoid(0.0185, 0.003, 0.0048, hair, collect);
+    eyebrow.position.set(side * 0.0295, 0.0448, -0.0685);
+    eyebrow.rotation.z = side * -0.17;
+    head.add(eyebrow);
+
+    // Oreille : pavillon ovale, creusé, collé à la tempe.
+    const ear = ellipsoid(0.0075, 0.0225, 0.0145, skin, collect);
+    ear.position.set(side * 0.0725, 0.002, 0.012);
+    ear.rotation.y = side * 0.28;
+    head.add(ear);
+    const earHollow = ellipsoid(0.003, 0.0125, 0.0065, skinShade, collect);
+    earHollow.position.set(side * 0.0765, 0.0, 0.009);
+    head.add(earHollow);
+
+    // Favoris : deux touches sombres sous la casquette.
+    const sideburn = ellipsoid(0.0048, 0.013, 0.0068, hair, collect);
+    sideburn.position.set(side * 0.0645, 0.034, 0.008);
+    head.add(sideburn);
   }
 
-  const brow = mesh(new THREE.BoxGeometry(0.13, 0.018, 0.03), skin, collect);
-  brow.position.set(0, 0.048, -0.088);
-  head.add(brow);
-
-  // Casquette de brousse : calotte + large bord, la silhouette qui distingue
-  // un humain d'un pantin à 30 m sous la futaie.
-  const capGeometry = new THREE.SphereGeometry(0.104, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2);
-  const cap = mesh(capGeometry, hat, collect);
-  cap.position.y = 0.045;
-  cap.scale.set(1.02, 0.95, 1.04);
+  // --- Casquette de brousse ---------------------------------------------
+  // Elle se pose sur le crâne, pas sur les sourcils : le bord doit laisser
+  // voir les yeux, sinon le visage n'a plus de regard du tout.
+  const cap = loft(
+    [
+      { y: 0.082, rx: 0.0785, rz: 0.088, z: 0.012 },
+      { y: 0.098, rx: 0.0805, rz: 0.0895, z: 0.012 },
+      { y: 0.116, rx: 0.0795, rz: 0.088, z: 0.012 },
+      { y: 0.134, rx: 0.0735, rz: 0.081, z: 0.012 },
+      { y: 0.15, rx: 0.061, rz: 0.067, z: 0.012 },
+      { y: 0.163, rx: 0.041, rz: 0.045, z: 0.012 },
+      { y: 0.171, rx: 0.017, rz: 0.019, z: 0.012 },
+    ],
+    hat,
+    collect,
+    { radial: 26, power: 2.1, tile: 0.22 },
+  );
   head.add(cap);
 
-  const brim = mesh(new THREE.CylinderGeometry(0.175, 0.185, 0.012, 18), hat, collect);
-  brim.position.y = 0.042;
+  // Bord : large devant, plus court derrière, qui s'affaisse — c'est ce tombé
+  // qui distingue une casquette de brousse d'une soucoupe.
+  const brim = loft(
+    [
+      { y: 0.086, rx: 0.093, rz: 0.104, z: -0.008 },
+      { y: 0.08, rx: 0.108, rz: 0.121, z: -0.013 },
+      { y: 0.074, rx: 0.115, rz: 0.13, z: -0.016 },
+      { y: 0.07, rx: 0.11, rz: 0.124, z: -0.017 },
+    ],
+    hat,
+    collect,
+    { radial: 28, power: 2, tile: 0.22 },
+  );
+  brim.rotation.x = 0.05;
   head.add(brim);
 
-  const band = mesh(new THREE.CylinderGeometry(0.106, 0.106, 0.022, 14, 1, true), pack, collect);
-  band.position.y = 0.07;
-  head.add(band);
-
-  // Jambes.
+  // --- Jambes -----------------------------------------------------------
   const thigh = { left: new THREE.Group(), right: new THREE.Group() };
   const knee = { left: new THREE.Group(), right: new THREE.Group() };
   const ankle = { left: new THREE.Group(), right: new THREE.Group() };
 
-  for (const [key, sign] of [["left", -1], ["right", 1]] as const) {
+  for (const [key, sign] of [
+    ["left", -1],
+    ["right", 1],
+  ] as const) {
     const hip = thigh[key];
     hip.position.set(sign * 0.095, -0.03, 0);
     hips.add(hip);
 
-    const upperLeg = limb(0.082, THIGH, trousers, collect);
-    upperLeg.position.y = -THIGH / 2;
+    const upperLeg = loft(
+      [
+        { y: 0.07, rx: 0.092, rz: 0.1 },
+        { y: 0, rx: 0.1, rz: 0.108 },
+        { y: -0.1, rx: 0.095, rz: 0.101 },
+        { y: -0.2, rx: 0.086, rz: 0.092 },
+        { y: -0.32, rx: 0.073, rz: 0.078 },
+        { y: -0.4, rx: 0.064, rz: 0.068 },
+        { y: -0.44, rx: 0.057, rz: 0.06 },
+      ],
+      trousers,
+      collect,
+      { radial: 20, power: 2.2 },
+    );
     hip.add(upperLeg);
+
+    // Poche cargo : un volume plaqué sur la cuisse.
+    const cargo = ellipsoid(0.038, 0.05, 0.02, trousersDark, collect);
+    cargo.position.set(sign * 0.082, -0.2, -0.03);
+    cargo.rotation.y = sign * 0.3;
+    hip.add(cargo);
 
     const kneeJoint = knee[key];
     kneeJoint.position.y = -THIGH;
     hip.add(kneeJoint);
 
-    const lowerLeg = limb(0.057, SHIN, trousers, collect);
-    lowerLeg.position.y = -SHIN / 2;
+    const lowerLeg = loft(
+      [
+        { y: 0.03, rx: 0.062, rz: 0.066 },
+        { y: -0.06, rx: 0.067, rz: 0.077 },
+        { y: -0.14, rx: 0.061, rz: 0.07 },
+        { y: -0.24, rx: 0.049, rz: 0.054 },
+        { y: -0.34, rx: 0.039, rz: 0.042 },
+        { y: -0.405, rx: 0.034, rz: 0.038 },
+      ],
+      trousers,
+      collect,
+      { radial: 18, power: 2.2 },
+    );
     kneeJoint.add(lowerLeg);
 
     const ankleJoint = ankle[key];
     ankleJoint.position.y = -SHIN;
     kneeJoint.add(ankleJoint);
 
-    const boot = mesh(new THREE.BoxGeometry(0.105, 0.085, 0.26), boots, collect);
-    boot.position.set(0, -0.045, -0.045);
-    ankleJoint.add(boot);
+    // Guêtre serrée sur la chaussure.
+    const gaiter = loft(
+      [
+        { y: 0.11, rx: 0.05, rz: 0.054 },
+        { y: 0.07, rx: 0.048, rz: 0.052 },
+        { y: 0.02, rx: 0.051, rz: 0.056 },
+      ],
+      trousersDark,
+      collect,
+      { radial: 16 },
+    );
+    ankleJoint.add(gaiter);
 
-    const sole = mesh(new THREE.BoxGeometry(0.112, 0.024, 0.272), boots, collect);
-    sole.position.set(0, -0.088, -0.045);
+    // Chaussure : tige, pied, bout, talon, semelle. Le pied est un volume
+    // horizontal : on le compose de volumes ronds plutôt que d'une boîte.
+    const shaft = loft(
+      [
+        { y: 0.05, rx: 0.049, rz: 0.052 },
+        { y: -0.005, rx: 0.052, rz: 0.058 },
+        { y: -0.03, rx: 0.055, rz: 0.07 },
+      ],
+      boots,
+      collect,
+      { radial: 16 },
+    );
+    ankleJoint.add(shaft);
+
+    const footBody = ellipsoid(0.054, 0.042, 0.098, boots, collect);
+    footBody.position.set(0, -0.032, -0.045);
+    ankleJoint.add(footBody);
+
+    const toe = ellipsoid(0.047, 0.03, 0.05, boots, collect);
+    toe.position.set(0, -0.04, -0.132);
+    ankleJoint.add(toe);
+
+    const heel = ellipsoid(0.048, 0.032, 0.042, boots, collect);
+    heel.position.set(0, -0.04, 0.038);
+    ankleJoint.add(heel);
+
+    const sole = ellipsoid(0.055, 0.015, 0.152, rubber, collect);
+    sole.position.set(0, -0.06, -0.05);
     ankleJoint.add(sole);
 
-    const laces = mesh(new THREE.BoxGeometry(0.06, 0.05, 0.04), pack, collect);
-    laces.position.set(0, -0.02, -0.14);
-    ankleJoint.add(laces);
-
-    // Pantalon resserré sur la botte : sans cela la jambe s'arrête net dans
-    // la chaussure et le personnage a des jambes de mannequin.
-    const blouse = mesh(new THREE.CylinderGeometry(0.072, 0.062, 0.13, 12), trousers, collect);
-    blouse.position.set(0, 0.06, 0);
-    ankleJoint.add(blouse);
+    const lacePanel = ellipsoid(0.022, 0.025, 0.012, webbing, collect);
+    lacePanel.position.set(0, -0.016, -0.078);
+    lacePanel.rotation.x = 0.5;
+    ankleJoint.add(lacePanel);
   }
 
   // Étui de cuisse et gaine : deux volumes qui cassent la ligne du pantalon.
-  const holster = mesh(new THREE.BoxGeometry(0.05, 0.125, 0.048), boots, collect);
-  holster.position.set(0.105, -0.2, 0.005);
+  const holsterMaterial = leather(0x2a2018);
+  materials.push(holsterMaterial);
+  const holster = ellipsoid(0.024, 0.062, 0.026, holsterMaterial, collect);
+  holster.position.set(0.107, -0.2, 0.005);
+  holster.rotation.z = 0.06;
   thigh.right.add(holster);
-  const holsterStrap = mesh(new THREE.BoxGeometry(0.085, 0.026, 0.07), webbing, collect);
-  holsterStrap.position.set(0.07, -0.15, 0.0);
+  const holsterStrap = ellipsoid(0.045, 0.012, 0.035, webbing, collect);
+  holsterStrap.position.set(0.075, -0.15, 0.0);
   thigh.right.add(holsterStrap);
 
-  const sheath = mesh(new THREE.BoxGeometry(0.042, 0.23, 0.033), boots, collect);
-  sheath.position.set(-0.1, -0.25, 0.02);
+  const sheath = ellipsoid(0.021, 0.115, 0.017, holsterMaterial, collect);
+  sheath.position.set(-0.102, -0.25, 0.02);
   sheath.rotation.z = 0.1;
   thigh.left.add(sheath);
 
@@ -457,6 +1043,8 @@ export function createHumanRig(): HumanRig {
 // Arme
 // ---------------------------------------------------------------------------
 
+export { HUMAN_HOLD, type Hold } from "@/game/holds";
+
 /**
  * Prise de l'arme par le corps.
  *
@@ -465,45 +1053,6 @@ export function createHumanRig(): HumanRig {
  * corps. Ces nombres sont mesurés : `check-human` vérifie que les deux épaules
  * peuvent effectivement atteindre leurs points (0,57 m de portée).
  */
-export interface Hold {
-  grip: [number, number, number];
-  fore: [number, number, number] | null;
-  aim: { position: [number, number, number]; yaw: number; roll?: number };
-  carry: { position: [number, number, number]; rotation: [number, number, number] };
-}
-
-export const HUMAN_HOLD: Record<WeaponId, Hold> = {
-  pistolet: {
-    grip: [0, -0.045, 0.03],
-    fore: [-0.035, -0.05, 0.012],
-    aim: { position: [0.055, 1.335, -0.44], yaw: 0 },
-    carry: { position: [0.235, 1.0, 0.02], rotation: [-1.44, 0.16, 0.08] },
-  },
-  m16: {
-    grip: [0, -0.05, 0.03],
-    fore: [0, 0, -0.18],
-    aim: { position: [0.16, 1.325, -0.28], yaw: -0.1 },
-    carry: { position: [0.255, 1.02, 0.02], rotation: [-1.46, 0.14, 0.06] },
-  },
-  couteau: {
-    grip: [0, -0.02, 0.03],
-    fore: null,
-    aim: { position: [0.24, 1.28, -0.34], yaw: 0.12, roll: 0.3 },
-    carry: { position: [0.24, 1.04, 0.0], rotation: [-1.5, 0.18, 0.08] },
-  },
-  machette: {
-    grip: [0, -0.02, 0.03],
-    fore: null,
-    aim: { position: [0.24, 1.3, -0.34], yaw: 0.12, roll: 0.3 },
-    carry: { position: [0.24, 1.04, 0.0], rotation: [-1.5, 0.18, 0.08] },
-  },
-  lance: {
-    grip: [0, -0.01, 0],
-    fore: [0, -0.01, -0.22],
-    aim: { position: [0.1, 1.3, -0.16], yaw: 0.02 },
-    carry: { position: [0.27, 0.98, -0.02], rotation: [1.5, 0.1, 0.05] },
-  },
-};
 
 export function setHumanWeapon(rig: HumanRig, id: WeaponId): void {
   if (rig.weaponId === id && rig.weapon) return;
@@ -744,12 +1293,8 @@ export function poseHuman(rig: HumanRig, pose: HumanPose): void {
 
   // --- Bras au repos (balancement) -------------------------------------
   const armSwing = amp * 0.85;
-  rig.shoulder.left.rotation.set(-swing * armSwing - crouch * 0.2, 0, 0.12);
-  rig.shoulder.right.rotation.set(
-    swing * armSwing - crouch * 0.2,
-    0,
-    -0.12,
-  );
+  rig.shoulder.left.rotation.set(-swing * armSwing - crouch * 0.2, 0, 0.055);
+  rig.shoulder.right.rotation.set(swing * armSwing - crouch * 0.2, 0, -0.055);
   rig.elbow.left.rotation.set(-0.12 - Math.max(0, -swing) * amp * 0.6 - rig.aim * 0.2, 0, 0);
   rig.elbow.right.rotation.set(-0.28 - Math.max(0, swing) * amp * 0.5, 0, 0);
 
@@ -796,7 +1341,13 @@ export function disposeHumanRig(rig: HumanRig): void {
   if (rig.weapon) disposeWeaponModel(rig.weapon);
   rig.weapon = null;
   for (const geometry of rig.geometries) geometry.dispose();
-  for (const material of rig.materials) material.dispose();
+  for (const material of rig.materials) {
+    const physical = material as THREE.MeshStandardMaterial;
+    for (const texture of [physical.map, physical.normalMap, physical.roughnessMap]) {
+      texture?.dispose();
+    }
+    material.dispose();
+  }
   rig.flash.material.map?.dispose();
   rig.flash.material.dispose();
   rig.group.removeFromParent();
