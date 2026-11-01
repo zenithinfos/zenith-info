@@ -78,14 +78,21 @@ export interface SceneProps {
 }
 
 /**
- * Rayon de chargement, en tuiles. 2 tuiles de 48 unités couvrent 96 unités,
- * soit la portée utile avant le brouillard (au-delà, on ne verrait rien).
+ * Rayon de chargement, en tuiles. Trois tuiles de 48 unités couvrent 144
+ * unités : de quoi voir plusieurs plans de troncs s'enfoncer dans la brume,
+ * ce qui est exactement ce qui donne la profondeur d'une forêt.
  */
+/**
+ * Direction du soleil, en décalage par rapport au joueur. Hauteur modérée et
+ * azimut marqué : lumière rasante d'avant la pluie, typique du bassin du Congo.
+ */
+const SUN_OFFSET = { x: 52, y: 62, z: 30 };
+
 /** Rayon de la trouée laissée autour du point de départ (camp). */
 const SPAWN_CLEARING = 7;
 
-const TILE_RADIUS_DESKTOP = 2;
-const TILE_RADIUS_MOBILE = 1;
+const TILE_RADIUS_DESKTOP = 3;
+const TILE_RADIUS_MOBILE = 2;
 
 /**
  * Texture de rai de lumière : dégradé doux, transparent sur les bords.
@@ -164,7 +171,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(SCENE_CONFIG.fog.color, 8, 110);
+    // Brouillard exponentiel : la densité est réaliste (la brume s'accumule
+    // avec la distance, elle ne commence pas net à 8 unités).
+    scene.fog = new THREE.FogExp2(SCENE_CONFIG.fog.color, 0.0125);
 
     // Ciel en dôme : bleu au zénith, mais lavé par la brume à l'horizon. Un
     // fond uni laissait une bande de ciel claire entre les troncs, à hauteur
@@ -220,6 +229,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
      * programme compilé et les autres feuillages cessent de bouger.
      */
     const sharedTime = { value: 0 };
+    /** Direction du soleil dans l'espace caméra (pour la transluminescence). */
+    const sharedSunDirView = { value: new THREE.Vector3(0, 1, 0) };
+    /** Couleur et intensité de la lumière transmise par les feuilles. */
+    const sharedSunColor = { value: new THREE.Color(0xffe0a8) };
 
     // ------------------------------------------------------------------
     // Chargement des textures
@@ -287,6 +300,39 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     scene.add(sun);
     scene.add(sun.target);
 
+    // Environnement : une sphère de ciel dégradée, convertie en carte de
+    // préfiltrage. C'est cette lumière d'ambiance, et non une lumière
+    // ambiante uniforme, qui donne du volume aux feuillages.
+    const environment = (() => {
+      const size = 256;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size / 2;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, "#7fa8c4"); // zénith
+      gradient.addColorStop(0.42, "#a8c0c4");
+      gradient.addColorStop(0.5, "#e6dcb8"); // horizon chaud
+      gradient.addColorStop(0.56, "#5c7048");
+      gradient.addColorStop(1, "#1a2416"); // sol de forêt
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const equirect = new THREE.CanvasTexture(canvas);
+      equirect.mapping = THREE.EquirectangularReflectionMapping;
+      equirect.colorSpace = THREE.SRGBColorSpace;
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const envMap = pmrem.fromEquirectangular(equirect).texture;
+      pmrem.dispose();
+      equirect.dispose();
+      return envMap;
+    })();
+    if (environment) {
+      scene.environment = environment;
+      scene.environmentIntensity = 0.45;
+    }
+
     const moon = new THREE.DirectionalLight(SCENE_CONFIG.lighting.moon.color, 0);
     moon.position.set(-50, 80, -30);
     scene.add(moon);
@@ -332,14 +378,16 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       normalScale: new THREE.Vector2(1.15, 1.15),
     });
     loadTexture(TEXTURES.ground, (texture) => {
-      texture.repeat.set(48, 48);
+      // Une tuile de texture tous les 4 mètres : à l'échelle d'une litière de
+      // feuilles mortes (10-30 cm), c'est ce qui donne du détail au premier plan.
+      texture.repeat.set(130, 130);
       groundMaterial.map = texture;
       groundMaterial.needsUpdate = true;
     });
     loadTexture(
       TEXTURES.groundNormal,
       (texture) => {
-        texture.repeat.set(48, 48);
+        texture.repeat.set(130, 130);
         groundMaterial.normalMap = texture;
         groundMaterial.needsUpdate = true;
       },
@@ -403,6 +451,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       material.onBeforeCompile = (shader) => {
         shader.uniforms.uTime = sharedTime;
         shader.uniforms.uSway = { value: sway };
+        shader.uniforms.uSunDirView = sharedSunDirView;
+        shader.uniforms.uSunColor = sharedSunColor;
         shader.vertexShader = shader.vertexShader
           .replace("#include <common>", "#include <common>\nuniform float uTime;\nuniform float uSway;")
           .replace(
@@ -419,6 +469,31 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       // Clé distincte par matériau : sinon Three réutilise le programme du
       // premier matériau compilé et les uniformes de vent divergent.
       material.customProgramCacheKey = () => `minkebe-foliage-${sway}-${material.alphaTest}`;
+      // Transluminescence : une feuille est mince, la lumière la traverse quand
+      // le soleil est derrière elle. Sans ce terme, le feuillage reste mat et
+      // « plastique », même avec de bonnes textures.
+      const previousFragment = material.onBeforeCompile;
+      material.onBeforeCompile = (shader, rendererInstance) => {
+        previousFragment.call(material, shader, rendererInstance);
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            "#include <common>",
+            `#include <common>
+             uniform vec3 uSunDirView;
+             uniform vec3 uSunColor;`,
+          )
+          .replace(
+            "#include <lights_fragment_end>",
+            `#include <lights_fragment_end>
+             {
+               // Face arrière éclairée : le soleil traverse la feuille.
+               float back = clamp(-dot(normal, uSunDirView), 0.0, 1.0);
+               float glancing = pow(back, 1.4);
+               totalEmissiveRadiance += uSunColor * glancing * 0.55;
+             }`,
+          );
+      };
+      material.customProgramCacheKey = () => `minkebe-foliage-${sway}-${material.alphaTest}-trans`;
       return material;
     };
 
@@ -487,6 +562,15 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       undefined,
       true,
     );
+
+    // Litière : feuilles mortes à plat, très légèrement inclinées sur la pente.
+    const litterMaterial = foliageMaterial(TEXTURES.foliageDeep, {
+      tint: 0x8a7a5c,
+      sway: 0.01,
+      alphaTest: 0.5,
+      normal: TEXTURES.foliageDeepNormal,
+      normalScale: 0.6,
+    });
 
     const sprayMaterial = foliageMaterial(TEXTURES.spray, {
       tint: 0xe4ecd8,
@@ -820,6 +904,26 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         mesh.instanceMatrix.needsUpdate = true;
         if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+
+      // --- litière
+      if (tile.litter.length > 0) {
+        const mesh = new THREE.InstancedMesh(cardGeometry, litterMaterial, tile.litter.length);
+        const TONES = [0xb99f74, 0x6d5a3e, 0x8d8a52];
+        tile.litter.forEach((leaf, index) => {
+          dummy.position.set(leaf.x, leaf.y, leaf.z);
+          dummy.rotation.set(-Math.PI / 2, leaf.rotation, 0, "YXZ");
+          dummy.scale.set(leaf.scale, leaf.scale * 0.8, 1);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(index, dummy.matrix);
+          tintColor.setHex(TONES[leaf.tone]).multiplyScalar(0.75 + tileRand() * 0.4);
+          mesh.setColorAt(index, tintColor);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.receiveShadow = true;
+        mesh.castShadow = false;
         group.add(mesh);
       }
 
@@ -1404,14 +1508,26 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         shaft.visible = daylight > 0.35;
       }
 
-      // Le soleil suit le joueur (ombres nettes autour de la caméra).
+      // Le soleil suit le joueur (ombres nettes autour de la caméra). Il reste
+      // bas : une lumière rasante traverse la futaie et sculpte les troncs,
+      // alors qu'un soleil au zénith aplatit tout.
       sun.position.set(
-        camera.position.x + 46,
-        96,
-        camera.position.z + 34,
+        camera.position.x + SUN_OFFSET.x,
+        SUN_OFFSET.y,
+        camera.position.z + SUN_OFFSET.z,
       );
       sun.target.position.set(camera.position.x, 0, camera.position.z);
       sun.target.updateMatrixWorld();
+
+      // Direction du soleil dans l'espace caméra, pour la transluminescence.
+      camera.updateMatrixWorld();
+      sharedSunDirView.value
+        .set(SUN_OFFSET.x, SUN_OFFSET.y, SUN_OFFSET.z)
+        .normalize()
+        .transformDirection(camera.matrixWorldInverse);
+      sharedSunColor.value
+        .copy(sun.color)
+        .multiplyScalar(Math.min(1.4, 0.25 + daylight * 1.1));
 
       if (composer) {
         gradePass!.uniforms.uTime.value = elapsed;
@@ -1436,14 +1552,15 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         const wet = weather === "pluie" || weather === "orage";
 
         // Brouillard : court et vert au sol, il donne la profondeur de la forêt.
-        const fog = scene.fog as THREE.Fog;
+        const fog = scene.fog as THREE.FogExp2;
         const fogColour = new THREE.Color(night ? FOREST_PALETTE.fogNight : FOREST_PALETTE.fogDay);
         if (wet) fogColour.lerp(new THREE.Color(0x6b7d6d), 0.4);
         fog.color.lerp(fogColour, 0.1);
 
-        const weatherFactor = weather === "brume" ? 0.45 : wet ? 0.7 : 1;
-        fog.near = THREE.MathUtils.lerp(fog.near, (6 + value * 10) * weatherFactor, 0.08);
-        fog.far = THREE.MathUtils.lerp(fog.far, (55 + value * 90) * weatherFactor, 0.08);
+        // Densité : 0,030 dans la brume épaisse, 0,009 en plein jour dégagé.
+        const weatherFactor = weather === "brume" ? 1.9 : wet ? 1.35 : 1;
+        const density = (0.019 - value * 0.008) * weatherFactor;
+        fog.density = THREE.MathUtils.lerp(fog.density, density, 0.08);
 
         const sky = new THREE.Color(
           value > 0.55 ? FOREST_PALETTE.skyDay : value > 0.15 ? FOREST_PALETTE.skyDusk : FOREST_PALETTE.skyNight,

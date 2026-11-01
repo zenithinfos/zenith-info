@@ -408,10 +408,22 @@ export interface TileOptions {
   clearing?: { x: number; z: number; radius: number };
 }
 
+export interface LitterPatch {
+  x: number;
+  y: number;
+  z: number;
+  scale: number;
+  rotation: number;
+  /** Teinte : 0 brun clair, 1 brun sombre, 2 olive. */
+  tone: 0 | 1 | 2;
+}
+
 export interface Tile {
   trees: Tree[];
   understory: UnderstoryPlant[];
   logs: FallenLog[];
+  /** Feuilles mortes à plat : le premier plan du sol. */
+  litter: LitterPatch[];
 }
 
 /** Hauteur (en unités) d'un plant de sous-bois, à l'échelle 1. */
@@ -645,6 +657,24 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
     });
   }
 
+  // --- litière : feuilles mortes posées à plat, ce que la texture de sol ne
+  // peut pas donner (relief, accroche de lumière au premier plan).
+  const litter: LitterPatch[] = [];
+  const litterCount = Math.round(area * 0.11);
+  for (let i = 0; i < litterCount; i++) {
+    const x = originX + rand() * TILE_SIZE;
+    const z = originZ + rand() * TILE_SIZE;
+    const roll = rand();
+    litter.push({
+      x,
+      z,
+      y: terrainHeight(x, z) + 0.045 + rand() * 0.03,
+      scale: 0.35 + Math.pow(rand(), 1.6) * 1.15,
+      rotation: rand() * Math.PI * 2,
+      tone: roll < 0.42 ? 0 : roll < 0.78 ? 1 : 2,
+    });
+  }
+
   // --- troncs tombés
   const logs: FallenLog[] = [];
   const logAttempts = Math.max(1, Math.round(area * logDensity * 3));
@@ -665,5 +695,5 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
     });
   }
 
-  return { trees, understory, logs };
+  return { trees, understory, logs, litter };
 }

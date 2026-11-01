@@ -11,8 +11,8 @@ export interface Vec3 {
 
 export interface FogConfig {
   color: number;
-  near: number;
-  far: number;
+  /** Densité du brouillard exponentiel (0,01 = brume légère à 100 unités). */
+  density: number;
 }
 
 export interface LightingConfig {
@@ -55,7 +55,7 @@ export const FOREST_PALETTE = {
 
 export const SCENE_CONFIG: SceneConfig = {
   background: FOREST_PALETTE.skyDay,
-  fog: { color: FOREST_PALETTE.fogDay, near: 18, far: 165 },
+  fog: { color: FOREST_PALETTE.fogDay, density: 0.0125 },
   lighting: {
     ambient: { color: 0xffffff, intensity: 0.42 },
     sun: { color: FOREST_PALETTE.sun, intensity: 2.1, position: { x: 60, y: 110, z: 40 } },
@@ -93,16 +93,14 @@ export function configForHour(
         ? FOREST_PALETTE.skyDusk
         : FOREST_PALETTE.skyNight;
 
-  const visibilityFactor =
-    weather === "brume" ? 0.45 : weather === "orage" ? 0.6 : weather === "pluie" ? 0.72 : 1;
+  const densityFactor = weather === "brume" ? 1.9 : weather === "orage" ? 1.45 : weather === "pluie" ? 1.25 : 1;
 
   return {
     ...base,
     background: sky,
     fog: {
       color: daylight < 0.2 ? FOREST_PALETTE.fogNight : FOREST_PALETTE.fogDay,
-      near: base.fog.near * visibilityFactor,
-      far: base.fog.far * visibilityFactor * (0.55 + daylight * 0.45),
+      density: base.fog.density * densityFactor * (1.6 - daylight * 0.6),
     },
     lighting: {
       ...base.lighting,

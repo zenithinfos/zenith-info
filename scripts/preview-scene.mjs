@@ -71,14 +71,41 @@ async function loadTexture(file, size = 160) {
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return { data, width: info.width, height: info.height, channels: info.channels };
+  const { width, height, channels } = info;
+  // Carte de normales tangente déduite de la luminance : c'est ce que le jeu
+  // calcule à partir de ses fichiers `*_normal.jpg`. Sans elle, l'aperçu ne
+  // montrerait aucune des nervures ni du relief des feuilles.
+  const normals = new Float32Array(width * height * 3);
+  const lum = (x, y) => {
+    const px = ((x % width) + width) % width;
+    const py = ((y % height) + height) % height;
+    const i = (py * width + px) * channels;
+    if (data[i + 3] < 60) return 0;
+    return (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255;
+  };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dx = (lum(x + 1, y) - lum(x - 1, y)) * 2.6;
+      const dy = (lum(x, y + 1) - lum(x, y - 1)) * 2.6;
+      const len = Math.hypot(dx, dy, 1);
+      const i = (y * width + x) * 3;
+      normals[i] = -dx / len;
+      normals[i + 1] = -dy / len;
+      normals[i + 2] = 1 / len;
+    }
+  }
+  return { data, width, height, channels, normals };
 }
 
 function sampleTexture(tex, u, v) {
   const x = Math.min(tex.width - 1, Math.max(0, Math.floor(u * tex.width)));
   const y = Math.min(tex.height - 1, Math.max(0, Math.floor((1 - v) * tex.height)));
   const i = (y * tex.width + x) * tex.channels;
-  return [tex.data[i] / 255, tex.data[i + 1] / 255, tex.data[i + 2] / 255, tex.data[i + 3] / 255];
+  const n = (y * tex.width + x) * 3;
+  return {
+    rgba: [tex.data[i] / 255, tex.data[i + 1] / 255, tex.data[i + 2] / 255, tex.data[i + 3] / 255],
+    normal: [tex.normals[n], tex.normals[n + 1], tex.normals[n + 2]],
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -421,9 +448,9 @@ function render(scene, game, camera, textures) {
   const stamp = new Int32Array(quads.length).fill(-1);
   const trunkStamp = new Int32Array(trunks.length).fill(-1);
 
-  const fogColor = [0.33, 0.44, 0.35];
-  const fogNear = 8;
-  const fogFar = 95;
+  const fogColor = [0.38, 0.45, 0.38];
+  // Même densité que le jeu (FogExp2, 0,0125) pour juger la profondeur réelle.
+  const FOG_DENSITY = 0.0125;
 
   for (let py = 0; py < HEIGHT; py++) {
     for (let px = 0; px < WIDTH; px++) {
@@ -463,7 +490,13 @@ function render(scene, game, camera, textures) {
                 const tc = capsuleHit(origin, dir, trunk, bestT);
                 if (tc !== null) {
                   bestT = tc;
-                  hit = { kind: "trunk", trunk, t: tc };
+                  hit = {
+                    kind: "trunk",
+                    trunk,
+                    t: tc,
+                    px: origin[0] + dir[0] * tc,
+                    py: origin[1] + dir[1] * tc,
+                  };
                 }
                 continue;
               }
@@ -480,7 +513,13 @@ function render(scene, game, camera, textures) {
               const hy = origin[1] + dir[1] * tc;
               if (hy < trunk.y0 || hy > trunk.y1) continue;
               bestT = tc;
-              hit = { kind: "trunk", trunk, t: tc };
+              hit = {
+                kind: "trunk",
+                trunk,
+                t: tc,
+                px: origin[0] + dir[0] * tc,
+                py: hy,
+              };
             } else {
               if (stamp[ref] === py * WIDTH + px) continue;
               stamp[ref] = py * WIDTH + px;
@@ -503,7 +542,7 @@ function render(scene, game, camera, textures) {
               if (u < 0 || u > 1 || v < 0 || v > 1) continue;
 
               const texel = sampleTexture(quad.tex, u, v);
-              if (texel[3] < 0.42) continue;
+              if (texel.rgba[3] < 0.42) continue;
 
               bestT = tq;
               hit = { kind: "card", quad, texel, normal: quad.normal, u, v, t: tq };
@@ -540,28 +579,72 @@ function render(scene, game, camera, textures) {
         g = blue[1] + (fogColor[1] * 0.98 - blue[1]) * haze;
         b = blue[2] + (fogColor[2] * 0.95 - blue[2]) * haze;
       } else if (hit.kind === "ground") {
-        const texel = sampleTexture(textures.ground, (hit.x * 0.06) % 1, (hit.z * 0.06) % 1);
-        const lambert = 0.35 + 0.5 * Math.max(0, SUN[1]);
-        r = texel[0] * lambert * 0.72;
-        g = texel[1] * lambert * 0.72;
-        b = texel[2] * lambert * 0.72;
+        // Même échelle que le jeu : une tuile de texture tous les 4 mètres.
+        const repeat = 1 / 4;
+        const texel = sampleTexture(
+          textures.ground,
+          ((hit.x * repeat) % 1 + 1) % 1,
+          ((hit.z * repeat) % 1 + 1) % 1,
+        );
+        // Normale du sol dans son propre repère (Y vers le haut).
+        const n = texel.normal;
+        const lambert = 0.28 + 0.72 * Math.max(0, n[0] * SUN[0] + n[1] * SUN[2] + n[2] * SUN[1]);
+        const ambient = 0.22;
+        r = texel.rgba[0] * (lambert * 0.85 + ambient);
+        g = texel.rgba[1] * (lambert * 0.85 + ambient);
+        b = texel.rgba[2] * (lambert * 0.85 + ambient);
+      } else if (hit.kind === "trunk" && hit.trunk.horizontal) {
+        // Segments (branches, troncs tombes) : teinte unie, une texture
+        // d'ecorce appliquee a un cylindre couche ferait des rayures.
+        const shade = hit.trunk.shade;
+        const lambert = 0.25 + 0.75 * Math.max(0.2, SUN[1]);
+        r = 0.3 * shade * lambert;
+        g = 0.23 * shade * lambert;
+        b = 0.165 * shade * lambert;
       } else if (hit.kind === "trunk") {
         const shade = hit.trunk.shade;
-        const lambert = 0.3 + 0.55 * Math.abs(SUN[0]);
-        r = 0.30 * shade * lambert;
-        g = 0.23 * shade * lambert;
-        b = 0.16 * shade * lambert;
+        // Lumière rasante : le fût est modelé par le côté d'où vient le soleil.
+        const lambert = 0.18 + 0.82 * Math.max(0, SUN[0] * 0.8 + SUN[2] * 0.4);
+        // Écorce : deux répétitions en travers du fût, six sur la hauteur.
+        const trunk = hit.trunk;
+        const u = (hit.px * 2) % 1;
+        const v = ((hit.py - trunk.y0) / Math.max(1, trunk.y1 - trunk.y0)) * 6 % 1;
+        const bark = sampleTexture(textures.bark, (u + 1) % 1, (v + 1) % 1);
+        const bn = bark.normal;
+        const barkLambert = 0.15 + 0.85 * Math.max(0, bn[0] * SUN[0] + bn[2] * SUN[2]);
+        r = bark.rgba[0] * shade * (lambert * 0.5 + barkLambert * 0.7);
+        g = bark.rgba[1] * shade * (lambert * 0.5 + barkLambert * 0.7);
+        b = bark.rgba[2] * shade * (lambert * 0.5 + barkLambert * 0.7);
       } else {
-        const lambert = 0.42 + 0.62 * Math.abs(dot(hit.normal, SUN));
-        const warm = 1 + 0.12 * Math.max(0, dot(hit.normal, SUN));
-        r = hit.texel[0] * hit.quad.tint * lambert * warm;
-        g = hit.texel[1] * hit.quad.tint * lambert * warm;
-        b = hit.texel[2] * hit.quad.tint * lambert * warm;
+        const quad = hit.quad;
+        const tn = hit.texel.normal;
+        // Normale monde : repère de la carte × normale tangente de la texture.
+        const nx = quad.uAxis[0] * tn[0] + quad.vAxis[0] * tn[1] + quad.normal[0] * tn[2];
+        const ny = quad.uAxis[1] * tn[0] + quad.vAxis[1] * tn[1] + quad.normal[1] * tn[2];
+        const nz = quad.uAxis[2] * tn[0] + quad.vAxis[2] * tn[1] + quad.normal[2] * tn[2];
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        const N = [nx / nl, ny / nl, nz / nl];
+
+        const front = Math.max(0, dot(N, SUN));
+        // Ciel : plus une surface regarde vers le haut, plus elle reçoit du ciel.
+        const sky = 0.5 + 0.5 * N[1];
+        const lambert = 0.1 + front * 0.95 + sky * 0.3;
+        const warm = 1 + 0.1 * front;
+
+        // Transluminescence : le soleil traverse les feuilles minces.
+        const back = Math.max(0, -dot(N, SUN));
+        const through = Math.pow(back, 1.4) * 0.6;
+
+        const alb = hit.texel.rgba;
+        const tint = quad.tint;
+        r = (alb[0] * lambert * warm + through * 0.95) * tint;
+        g = (alb[1] * lambert * warm + through * 0.85) * tint;
+        b = (alb[2] * lambert * warm + through * 0.55) * tint;
       }
 
-      // --- brouillard ---
+      // --- brouillard exponentiel (densité) ---
       if (hit) {
-        const f = Math.min(1, Math.max(0, (bestT - fogNear) / (fogFar - fogNear))) ** 1.6;
+        const f = 1 - Math.exp(-Math.pow(bestT * FOG_DENSITY, 2));
         r = r * (1 - f) + fogColor[0] * f;
         g = g * (1 - f) + fogColor[1] * f;
         b = b * (1 - f) + fogColor[2] * f;
@@ -630,7 +713,8 @@ const textures = {
   foliage: await loadTexture("public/textures/foliage.png"),
   foliageDeep: await loadTexture("public/textures/foliage-deep.png"),
   foliagePale: await loadTexture("public/textures/foliage-pale.png"),
-  ground: await loadTexture("public/textures/ground.jpg"),
+  ground: await loadTexture("public/textures/ground.jpg", 448),
+  bark: await loadTexture("public/textures/bark.jpg", 256),
   fern: await loadTexture("public/textures/fern.png"),
   grass: await loadTexture("public/textures/grass.png"),
   spray: await loadTexture("public/textures/spray.png"),

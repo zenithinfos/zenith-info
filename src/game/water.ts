@@ -132,8 +132,7 @@ export interface WaterUniforms {
   uColor: number;
   uOpacity: number;
   uNormalMap: string;
-  uFogNear: number;
-  uFogFar: number;
+  uFogDensity: number;
 }
 
 export function waterUniforms(body: WaterBody): WaterUniforms {
@@ -143,8 +142,7 @@ export function waterUniforms(body: WaterBody): WaterUniforms {
     uColor: body.color,
     uOpacity: body.opacity,
     uNormalMap: "/textures/water_normal.jpg",
-    uFogNear: SCENE_CONFIG.fog.near,
-    uFogFar: SCENE_CONFIG.fog.far,
+    uFogDensity: SCENE_CONFIG.fog.density,
   };
 }
 
