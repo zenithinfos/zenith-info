@@ -976,10 +976,21 @@ export default function MinkebeGame() {
           {phase === "accueil" && (
             <div className="absolute inset-0 z-20 flex flex-col justify-end bg-gradient-to-t from-canopy-950 via-canopy-950/70 to-transparent p-5 md:p-8">
               <div className="max-w-2xl space-y-4">
+                {/* Le nom du jeu, en clair. C'est la première chose qu'on
+                    doit lire en arrivant : le titre, pas un sous-titre. */}
+                <div className="space-y-2">
+                  <p className="text-[0.6rem] uppercase tracking-[0.42em] text-moss-300">
+                    Jeu de survie · Gabon · 0° 30′ N
+                  </p>
+                  <h2 className="display text-5xl leading-[0.9] tracking-[0.16em] text-parchment md:text-7xl">
+                    MINKÉBÉ
+                  </h2>
+                  <span className="block h-px w-28 bg-gradient-to-r from-amber-glow via-laterite-400/60 to-transparent" />
+                </div>
                 <p className="eyebrow">Expédition 01 · Réserve de Minkébé</p>
-                <h2 className="display text-3xl text-parchment md:text-5xl">
+                <h3 className="display text-xl text-parchment/90 md:text-2xl">
                   Entrez dans l&apos;une des dernières forêts intactes du Gabon.
-                </h2>
+                </h3>
                 <p className="max-w-xl text-sm text-mist/75">
                   Suivez la faune dans la futaie, épaules une arme, abattez, dépecez.
                   La viande se rapporte au camp ; le carnet garde la trace du reste.

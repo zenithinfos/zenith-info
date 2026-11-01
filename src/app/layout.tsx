@@ -4,11 +4,11 @@ import { APP_NAME, APP_VERSION } from "@/lib/version";
 
 export const metadata: Metadata = {
   title: {
-    default: `${APP_NAME} — exploration de la forêt gabonaise`,
+    default: `${APP_NAME} — le jeu de la forêt gabonaise`,
     template: `%s · ${APP_NAME}`,
   },
   description:
-    "Jeu d'exploration 3D dans la réserve de Minkébé : documentez la faune, cartographiez les bais, jouez en équipe. Next.js · Three.js · PostgreSQL.",
+    "Jeu de survie 3D dans la réserve de Minkébé : pistez la faune, chassez, dépecez, cartographiez les bais, jouez en équipe jusqu'à huit. Next.js · Three.js · PostgreSQL.",
   applicationName: APP_NAME,
   manifest: "/manifest.webmanifest",
   metadataBase: new URL(process.env.NEXT_PUBLIC_GAME_URL ?? "http://localhost:3000"),
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: `${APP_NAME} — la forêt de Minkébé`,
     description:
-      "Un jeu d'exploration et de conservation, en solo ou à huit, dans l'une des forêts les plus intactes du bassin du Congo.",
+      "Un jeu de survie et d'exploration, en solo ou à huit, dans l'une des forêts les plus intactes du bassin du Congo.",
     type: "website",
     locale: "fr_FR",
     images: [{ url: "/images/menu-forest.jpg", width: 1600, height: 900, alt: "Canopée de Minkébé" }],

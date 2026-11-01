@@ -1,6 +1,7 @@
-# Minkébé
+# MINKÉBÉ
 
-Jeu d'exploration et de conservation dans la réserve de Minkébé (nord-est du Gabon).
+Jeu de survie et d'exploration dans la réserve de Minkébé (nord-est du Gabon) :
+on y piste la faune, on chasse, on dépece — et on revient au camp.
 Forêt 3D procédurale, faune réactive, carnet de terrain, multijoueur à 8, sauvegardes
 PostgreSQL et distribution (clients + paquet serveur).
 

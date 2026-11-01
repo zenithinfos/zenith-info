@@ -9,23 +9,24 @@ import { ZONES } from "@/game/levels";
 import { APP_NAME, APP_VERSION, GAME_VERSION, GAME_URL } from "@/lib/version";
 
 export const metadata = {
-  title: `${APP_NAME} — exploration de la forêt gabonaise`,
+  // `absolute` : le nom du jeu d'abord, sans le gabarit du layout.
+  title: { absolute: `${APP_NAME} — le jeu de la forêt gabonaise` },
   description:
-    "Explorez la réserve de Minkébé en 3D : documentez 12 espèces, cartographiez 8 zones et jouez jusqu'à 8 en multijoueur.",
+    "Explorez la réserve de Minkébé en 3D : pister 10 espèces, chasser, dépecer, cartographier 8 zones et jouer jusqu'à 8 en multijoueur.",
 };
 
 const STATS = [
   { value: "8", label: "zones à cartographier" },
-  { value: "12", label: "espèces à documenter" },
+  { value: "10", label: "espèces modélisées" },
   { value: "8", label: "joueurs par salon" },
-  { value: "0", label: "animal blessé" },
+  { value: "5", label: "armes" },
 ];
 
 const HIGHLIGHTS = [
   {
     emoji: "🌳",
     title: "Forêt simulée, pas décor",
-    text: "620 arbres instanciés, sol déformé, brume volumétrique et cycle jour/nuit de 24 minutes réelles.",
+    text: "4 000 arbres instanciés, 400 000 cartes de feuillage, sol déformé, brume volumétrique et cycle jour/nuit de 24 minutes réelles.",
   },
   {
     emoji: "🦍",
@@ -58,7 +59,9 @@ export default function HomePage() {
             🌿
           </span>
           <span>
-            <span className="display block text-lg leading-none text-parchment">Minkébé</span>
+            <span className="display block text-lg leading-none tracking-[0.16em] text-parchment">
+              MINKÉBÉ
+            </span>
             <span className="block text-[0.6rem] uppercase tracking-[0.28em] text-moss-300">
               Zenith Info
             </span>
@@ -84,7 +87,7 @@ export default function HomePage() {
       <section className="relative mx-auto max-w-7xl px-5 pb-10 pt-6">
         <div className="grid items-center gap-8 lg:grid-cols-[1.05fr_1fr]">
           <div className="animate-float-up space-y-6">
-            <p className="eyebrow">Réserve de Minkébé · Gabon · 0° 30′ N</p>
+            <p className="eyebrow">MINKÉBÉ · Réserve de Minkébé · Gabon · 0° 30′ N</p>
             <h1 className="display text-4xl leading-[1.02] text-parchment sm:text-5xl lg:text-6xl">
               La forêt avant
               <br />
@@ -93,9 +96,9 @@ export default function HomePage() {
               </span>
             </h1>
             <p className="max-w-xl text-sm leading-relaxed text-mist/75 sm:text-base">
-              Un jeu d&apos;exploration et de conservation dans l&apos;une des dernières grandes
-              forêts intactes du bassin du Congo. Documentez la faune, cartographiez les bais,
-              ramenez des données — pas des trophées.
+              Un jeu de survie et d&apos;exploration dans l&apos;une des dernières grandes forêts
+              intactes du bassin du Congo. Suivez la faune, chassez pour manger, dépecez,
+              cartographiez les bais — et revenez au camp avant la nuit.
             </p>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -192,8 +195,9 @@ export default function HomePage() {
             <p className="eyebrow">Carnet de terrain</p>
             <h2 className="display mt-1 text-3xl text-parchment">Les espèces emblématiques</h2>
             <p className="mt-1 max-w-2xl text-sm text-mist/65">
-              Chaque observation alimente votre carnet et votre score. Les animaux ne sont jamais
-              blessés : la seule « arme » du jeu est un appareil photo.
+              Chaque observation alimente votre carnet et votre score ; chaque bête abattue
+              alimente la marmite. Dix espèces sont modélisées en 3D, du céphalophe bleu
+              à l&apos;éléphant de forêt.
             </p>
           </div>
           <span className="chip">12 espèces · 4 raretés</span>
@@ -312,10 +316,10 @@ export default function HomePage() {
       <footer className="mt-8 border-t border-mist/10 bg-canopy-950/60">
         <div className="mx-auto grid max-w-7xl gap-6 px-5 py-10 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <p className="display text-lg text-parchment">Minkébé</p>
+            <p className="display text-lg tracking-[0.16em] text-parchment">MINKÉBÉ</p>
             <p className="mt-1 text-[0.7rem] leading-relaxed text-mist/50">
-              Un jeu de conservation développé par Zenith Info, inspiré de la réserve
-              éponyme du Gabon.
+              Un jeu de survie et d&apos;exploration développé par Zenith Info, inspiré de
+              la réserve éponyme du Gabon.
             </p>
           </div>
           <div>
