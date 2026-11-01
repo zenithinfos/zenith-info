@@ -117,9 +117,13 @@ export function configForHour(
 /** Textures utilisées par la végétation instanciée. */
 export const TEXTURES = {
   ground: "/textures/ground.jpg",
+  groundNormal: "/textures/ground_normal.jpg",
   bark: "/textures/bark.jpg",
+  barkNormal: "/textures/bark_normal.jpg",
   bigleaf: "/textures/bigleaf.png",
   fern: "/textures/fern.png",
+  grass: "/textures/grass.png",
+  spray: "/textures/spray.png",
   foliage: "/textures/foliage.png",
   foliageDeep: "/textures/foliage-deep.png",
   foliagePale: "/textures/foliage-pale.png",
@@ -127,6 +131,13 @@ export const TEXTURES = {
   mist: "/textures/mist.png",
   rock: "/textures/rock.jpg",
   waterNormal: "/textures/water_normal.jpg",
+  foliageNormal: "/textures/foliage_normal.jpg",
+  foliageDeepNormal: "/textures/foliage-deep_normal.jpg",
+  foliagePaleNormal: "/textures/foliage-pale_normal.jpg",
+  bigleafNormal: "/textures/bigleaf_normal.jpg",
+  fernNormal: "/textures/fern_normal.jpg",
+  grassNormal: "/textures/grass_normal.jpg",
+  sprayNormal: "/textures/spray_normal.jpg",
 } as const;
 
 /**

@@ -142,6 +142,24 @@ function buildScene(game, random, textures) {
           tree.kind === "emergent" ? 0.55 : tree.kind === "mid" ? 0.68 : tree.kind === "understory" ? 0.8 : 0.72,
       });
 
+      // Charpentières : segments obliques, dessinés comme des troncs couchés.
+      for (const branch of tree.branches ?? []) {
+        const dx = Math.cos(branch.angle) * branch.length * Math.cos(branch.rise);
+        const dz = Math.sin(branch.angle) * branch.length * Math.cos(branch.rise);
+        const dy = Math.sin(branch.rise) * branch.length;
+        trunks.push({
+          x: tree.x,
+          z: tree.z,
+          y0: tree.y + branch.y,
+          y1: tree.y + branch.y + dy,
+          r: branch.radius,
+          shade: 0.7,
+          horizontal: true,
+          x2: tree.x + dx,
+          z2: tree.z + dz,
+        });
+      }
+
       for (const card of game.crownCards(tree, tileRandom)) {
         const rx = card.horizontal
           ? -Math.PI / 2 + (tileRandom() - 0.5) * card.tilt
@@ -154,8 +172,9 @@ function buildScene(game, random, textures) {
         const normal = [m[0][2], m[1][2], m[2][2]];
 
         const family = tileRandom();
-        const tex =
-          family < 0.45
+        const tex = card.sparse
+          ? textures.spray
+          : family < 0.45
             ? textures.foliage
             : family < 0.78
               ? textures.foliageDeep
@@ -189,7 +208,9 @@ function buildScene(game, random, textures) {
             ? textures.foliage
             : isCover
               ? textures.foliageDeep
-              : textures.fern;
+              : plant.variant === 4
+                ? textures.grass
+                : textures.fern;
       for (const card of game.plantCards(plant)) {
         let uAxis;
         let vAxis;
@@ -293,7 +314,31 @@ function buildScene(game, random, textures) {
   });
 
   trunks.forEach((trunk, index) => {
-    if (trunk.horizontal) return;
+    if (trunk.horizontal) {
+      // Segment oblique : on l'échantillonne dans toutes les cellules qu'il
+      // traverse, plus une marge égale à son rayon.
+      const steps = Math.max(2, Math.ceil(Math.hypot(trunk.x2 - trunk.x, trunk.z2 - trunk.z) / (CELL * 0.5)));
+      const margin = Math.ceil((trunk.r + 0.4) / CELL);
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const x = trunk.x + (trunk.x2 - trunk.x) * t;
+        const z = trunk.z + (trunk.z2 - trunk.z) * t;
+        const ix = Math.floor(x / CELL);
+        const iz = Math.floor(z / CELL);
+        for (let dz = -margin; dz <= margin; dz++) {
+          for (let dx = -margin; dx <= margin; dx++) {
+            const k = key(ix + dx, iz + dz);
+            const bucket = grid.get(k);
+            if (bucket) {
+              if (!bucket.includes(-(index + 1))) bucket.push(-(index + 1));
+            } else {
+              grid.set(k, [-(index + 1)]);
+            }
+          }
+        }
+      }
+      return;
+    }
     const k = key(Math.floor(trunk.x / CELL), Math.floor(trunk.z / CELL));
     const bucket = grid.get(k);
     if (bucket) bucket.push(-(index + 1));
@@ -315,6 +360,39 @@ const SUN = (() => {
 
 function dot(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/** Intersection rayon / capsule (segments obliques : branches, troncs tombés). */
+function capsuleHit(o, d, trunk, bestT) {
+  const a = [trunk.x, trunk.y0, trunk.z];
+  const b = [trunk.x2 ?? trunk.x, trunk.y1, trunk.z2 ?? trunk.z];
+  const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const ao = [o[0] - a[0], o[1] - a[1], o[2] - a[2]];
+  const abLen2 = dot(ab, ab);
+  if (abLen2 < 1e-6) return null;
+  // On projette dans un repère où la capsule est un cylindre infini, puis on
+  // borne le paramètre au segment.
+  const abd = dot(ab, d);
+  const abab = abLen2;
+  const abao = dot(ab, ao);
+  const dao = dot(d, ao);
+  const d2 = dot(d, d);
+  const A = abab * d2 - abd * abd;
+  if (Math.abs(A) < 1e-8) return null;
+  const B = abab * dao * 2 - abd * abao * 2;
+  const C = abab * dot(ao, ao) - abao * abao - abab * trunk.r * trunk.r;
+  const disc = B * B - 4 * A * C;
+  if (disc <= 0) return null;
+  const sq = Math.sqrt(disc);
+  for (const t of [(-B - sq) / (2 * A), (-B + sq) / (2 * A)]) {
+    if (t <= 0.05 || t >= bestT) continue;
+    const p = [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
+    const ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+    const proj = dot(ap, ab) / abab;
+    if (proj < 0 || proj > 1) continue;
+    return t;
+  }
+  return null;
 }
 
 function render(scene, game, camera, textures) {
@@ -381,6 +459,14 @@ function render(scene, game, camera, textures) {
               if (trunkStamp[index] === py * WIDTH + px) continue;
               trunkStamp[index] = py * WIDTH + px;
               const trunk = trunks[index];
+              if (trunk.horizontal) {
+                const tc = capsuleHit(origin, dir, trunk, bestT);
+                if (tc !== null) {
+                  bestT = tc;
+                  hit = { kind: "trunk", trunk, t: tc };
+                }
+                continue;
+              }
               const ox = origin[0] - trunk.x;
               const oz = origin[2] - trunk.z;
               const a = dir[0] * dir[0] + dir[2] * dir[2];
@@ -546,6 +632,8 @@ const textures = {
   foliagePale: await loadTexture("public/textures/foliage-pale.png"),
   ground: await loadTexture("public/textures/ground.jpg"),
   fern: await loadTexture("public/textures/fern.png"),
+  grass: await loadTexture("public/textures/grass.png"),
+  spray: await loadTexture("public/textures/spray.png"),
   bigleaf: await loadTexture("public/textures/bigleaf.png"),
   canopy: await loadTexture("public/textures/canopy.png", 128),
 };

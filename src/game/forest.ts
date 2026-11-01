@@ -35,13 +35,26 @@ export interface Tree {
   kind: TreeKind;
   /** Échelle des cartes de feuillage. */
   crownScale: number;
-  /** Nombre de cartes de feuillage (3 = croix + plan horizontal). */
-  crownCards: number;
   rotation: number;
   /** Teinte : index dans FOLIAGE_TINTS. */
   tint: number;
   /** Légère inclinaison (arbres penchés vers la lumière). */
   lean: [number, number];
+  /** Charpentières : sans elles, le houppier flotte au-dessus d'un mât nu. */
+  branches?: Branch[];
+}
+
+export interface Branch {
+  /** Hauteur d'insertion sur le fût, en unités. */
+  y: number;
+  /** Azimut, en radians. */
+  angle: number;
+  /** Longueur de la branche. */
+  length: number;
+  /** Inclinaison vers le haut (0 = horizontale). */
+  rise: number;
+  /** Rayon à la base. */
+  radius: number;
 }
 
 export interface UnderstoryPlant {
@@ -50,8 +63,8 @@ export interface UnderstoryPlant {
   y: number;
   scale: number;
   rotation: number;
-  /** 0 = fougère, 1 = balisier, 2 = buisson, 3 = couvre-sol. */
-  variant: 0 | 1 | 2 | 3;
+  /** 0 = fougère, 1 = balisier, 2 = buisson, 3 = couvre-sol, 4 = herbe. */
+  variant: 0 | 1 | 2 | 3 | 4;
 }
 
 export interface FallenLog {
@@ -101,6 +114,44 @@ export function densityAt(x: number, z: number): number {
   const edge = Math.max(Math.abs(x), Math.abs(z)) / WORLD_LIMIT;
   if (edge > 0.72) density = Math.min(1, density + (edge - 0.72) * 2.4);
   return Math.max(0, Math.min(1, density));
+}
+
+/** Bruit de valeur tuilable et déterministe (aucune allocation par appel). */
+function hash2(ix: number, iz: number, seed: number): number {
+  let h = seed ^ Math.imul(ix, 0x27d4eb2d) ^ Math.imul(iz, 0x165667b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function valueNoise2(x: number, z: number, scale: number, seed: number): number {
+  const fx = x / scale;
+  const fz = z / scale;
+  const ix = Math.floor(fx);
+  const iz = Math.floor(fz);
+  const tx = fx - ix;
+  const tz = fz - iz;
+  const sx = tx * tx * (3 - 2 * tx);
+  const sz = tz * tz * (3 - 2 * tz);
+  const a = hash2(ix, iz, seed);
+  const b = hash2(ix + 1, iz, seed);
+  const c = hash2(ix, iz + 1, seed);
+  const d = hash2(ix + 1, iz + 1, seed);
+  return (a + (b - a) * sx) * (1 - sz) + (c + (d - c) * sx) * sz;
+}
+
+/**
+ * Chablis : proportion de canopée arrachée par une chute d'arbre, 0-1.
+ * Ces trouées sont ce qui donne son rythme à une vraie forêt : sans elles, la
+ * futaie est un mur régulier et l'on ne voit jamais un rayon de soleil.
+ */
+export function gapAt(x: number, z: number): number {
+  const n =
+    valueNoise2(x, z, 46, 7717) * 0.6 +
+    valueNoise2(x, z, 19, 1313) * 0.3 +
+    valueNoise2(x, z, 7, 505) * 0.1;
+  // Seules les valeurs hautes ouvrent une trouée : elles sont assez rares.
+  return Math.max(0, Math.min(1, (n - 0.58) * 3.6));
 }
 
 function acceptPoint(
@@ -160,6 +211,11 @@ export interface CrownCard {
   angle: number;
   /** Inclinaison aléatoire pour casser la régularité. */
   tilt: number;
+  /**
+   * Carte éparse (feuilles détachées). Les cartes de bord du houppier restent
+   * trouées, sinon la couronne se lit comme une boule pleine.
+   */
+  sparse?: boolean;
 }
 
 export function crownCards(tree: Tree, random: () => number): CrownCard[] {
@@ -170,87 +226,97 @@ export function crownCards(tree: Tree, random: () => number): CrownCard[] {
     // Arbuste de sous-bois : houppier large et bas, du sol jusqu'à la cime.
     // C'est cette strate qui masque l'horizon à hauteur d'homme.
     const height = trunkHeight + crownScale * 0.6;
-    // Trois plans à 60° plutôt que deux : les feuilles gardent leur taille
-    // au lieu d'être étirées sur toute la hauteur de l'arbuste.
     for (let i = 0; i < 3; i++) {
+      const a = rotation + i * 2.09;
       cards.push({
         offset: [
-          Math.cos(rotation + i * 2.09) * crownScale * 0.16,
-          height * (0.42 + i * 0.2),
-          Math.sin(rotation + i * 2.09) * crownScale * 0.16,
+          Math.cos(a) * crownScale * 0.18,
+          height * (0.4 + i * 0.2),
+          Math.sin(a) * crownScale * 0.18,
         ],
-        width: crownScale * 2.2,
-        height: crownScale * 1.9,
+        width: crownScale * 2.1,
+        height: crownScale * 1.7,
         horizontal: false,
-        angle: rotation + i * 2.09,
-        tilt: 0.24,
+        angle: a,
+        tilt: 0.26,
       });
     }
     cards.push({
-      offset: [0, height * 0.92, 0],
-      width: crownScale * 2.8,
-      height: crownScale * 2.8,
+      offset: [0, height * 0.9, 0],
+      width: crownScale * 2.6,
+      height: crownScale * 2.6,
       horizontal: true,
       angle: rotation + random() * Math.PI,
-      tilt: 0.22,
+      tilt: 0.24,
     });
     return cards;
   }
 
   if (kind === "understory") {
-    // Jeunes arbres : houppier bas mais étalé. Sans eux, la coupe verticale
-    // montre un trou entre le sol et les premières branches (on verrait le
-    // ciel sous la canopée, ce qui n'arrive jamais en forêt de terre ferme).
-    for (let i = 0; i < 2; i++) {
+    // Jeunes arbres : houppier bas mais étalé, en quatre bouquets.
+    const base = trunkHeight * 0.68;
+    for (let i = 0; i < 4; i++) {
+      const a = rotation + (i * Math.PI) / 2 + random() * 0.5;
+      const r = crownScale * (0.18 + random() * 0.3);
       cards.push({
-        offset: [0, trunkHeight * 0.72 + crownScale * 0.9, 0],
-        width: crownScale * 3.4,
-        height: crownScale * 2.9,
+        offset: [Math.cos(a) * r, base + crownScale * (0.2 + random() * 0.9), Math.sin(a) * r],
+        width: crownScale * (1.7 + random() * 0.7),
+        height: crownScale * (1.4 + random() * 0.6),
         horizontal: false,
-        angle: rotation + i * (Math.PI / 2),
-        tilt: 0.16,
+        angle: a,
+        tilt: 0.3,
       });
     }
-    // Une carte à plat pour fermer la vue du dessus.
     cards.push({
-      offset: [0, trunkHeight + crownScale * 0.5, 0],
-      width: crownScale * 3.2,
-      height: crownScale * 3.2,
+      offset: [0, trunkHeight + crownScale * 0.45, 0],
+      width: crownScale * 2.7,
+      height: crownScale * 2.7,
       horizontal: true,
       angle: rotation + random() * Math.PI,
-      tilt: 0.12,
+      tilt: 0.14,
     });
     return cards;
   }
 
-  // Toit : une grande carte à plat au sommet.
-  cards.push({
-    offset: [0, trunkHeight + crownScale * 0.55, 0],
-    width: crownScale * 2.5,
-    height: crownScale * 2.5,
-    horizontal: true,
-    angle: rotation + random() * Math.PI,
-    tilt: 0.1,
-  });
+  // --- arbres de canopée : nuage de bouquets dans un ellipsoïde
+  // Peu de grandes cartes donnent des « autocollants » ; beaucoup de petites
+  // cartes réparties en volume se lisent comme une masse de feuilles.
+  const clumps = kind === "emergent" ? 11 : 9;
+  const crownBase = trunkHeight * 0.55;
+  const crownHeight = trunkHeight * 0.55 + crownScale * 0.55;
+  const spread = crownScale * 0.62;
 
-  // Volume : cartes verticales empilées sur les deux tiers supérieurs du fût,
-  // avec un rayon qui diminue vers le haut (silhouette en dôme).
-  const verticalCards = kind === "emergent" ? 5 : 4;
-  for (let i = 0; i < verticalCards; i++) {
-    const t = i / (verticalCards - 1);
-    const radius = crownScale * (0.85 - t * 0.45);
-    const angle = rotation + (i * Math.PI) / Math.max(1, verticalCards - 1);
+  for (let i = 0; i < clumps; i++) {
+    const a = rotation + i * 2.39996 + random() * 0.7; // angle d'or : pas d'alignement
+    // Répartition en anneaux : les bouquets du centre sont plus haut.
+    const radius = spread * Math.sqrt(random()) * (0.35 + 0.65 * (i / clumps));
+    const y = crownBase + crownHeight * (0.12 + 0.88 * Math.pow(random(), 0.75));
+    const size = crownScale * (0.85 + random() * 0.75);
+    cards.push({
+      offset: [Math.cos(a) * radius, y, Math.sin(a) * radius],
+      width: size * 1.55,
+      height: size * 1.15,
+      horizontal: false,
+      angle: a + (random() - 0.5) * 0.8,
+      tilt: 0.42,
+      // Les bouquets extérieurs sont épars : le ciel passe entre les feuilles.
+      sparse: radius > spread * 0.42 && random() < 0.7,
+    });
+  }
+
+  // Toit : deux nappes couchées au sommet, elles bouchent la vue du ciel.
+  for (let i = 0; i < (kind === "emergent" ? 2 : 1); i++) {
     cards.push({
       offset: [
-        Math.cos(angle) * radius * 0.35,
-        trunkHeight + crownScale * (0.1 + t * 0.55),
-        Math.sin(angle) * radius * 0.35,
+        (random() - 0.5) * spread * 0.6,
+        trunkHeight + crownScale * (0.35 + random() * 0.3),
+        (random() - 0.5) * spread * 0.6,
       ],
-      width: crownScale * (2.1 - t * 0.5) * (0.9 + random() * 0.25),
-      height: crownScale * (1.5 - t * 0.3) * (0.9 + random() * 0.3),
-      horizontal: false,
-      angle,
-      tilt: 0.3,
+      width: crownScale * (2.2 + random() * 0.6),
+      height: crownScale * (2.2 + random() * 0.6),
+      horizontal: true,
+      angle: rotation + random() * Math.PI,
+      tilt: 0.12,
     });
   }
 
@@ -349,9 +415,9 @@ export interface Tile {
 }
 
 /** Hauteur (en unités) d'un plant de sous-bois, à l'échelle 1. */
-const PLANT_HEIGHT = [1.0, 1.7, 1.5] as const;
+const PLANT_HEIGHT = [1.0, 1.7, 1.5, 0.4, 0.95] as const;
 /** Largeur d'un plant par rapport à sa hauteur. */
-const PLANT_WIDTH = [1.45, 1.2, 1.35] as const;
+const PLANT_WIDTH = [1.45, 1.2, 1.35, 1.4, 1.5] as const;
 
 export interface PlantCard {
   x: number;
@@ -396,6 +462,8 @@ export function plantCards(plant: UnderstoryPlant): PlantCard[] {
 
   const height = PLANT_HEIGHT[plant.variant] * plant.scale;
   const width = PLANT_WIDTH[plant.variant] * height;
+  // L'herbe est plus haute que large : les deux plans croisés suffisent à la
+  // lire comme une touffe, sans coûter une troisième carte.
   return [0, 1].map((k) => ({
     x: plant.x,
     // Le bas de la carte repose sur le terrain, avec un léger enfoncement.
@@ -449,6 +517,8 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
     const x = originX + rand() * TILE_SIZE;
     const z = originZ + rand() * TILE_SIZE;
     if (inClearing(x, z, 4)) continue;
+    // Un chablis éclaircit la futaie : arbres abattus, lumière au sol.
+    if (rand() < gapAt(x, z) * 1.15) continue;
     if (!acceptPoint(x, z, rand, { minShore: 3, maxSlope: 0.6 })) continue;
 
     const roll = rand();
@@ -483,6 +553,31 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
             ? 2.6 + rand() * 1.6
             : 0.85 + rand() * 0.75;
 
+    // Charpentières : deux à quatre, insérées dans la moitié haute du fût.
+    const branches: Branch[] = [];
+    if (kind === "emergent" || kind === "mid") {
+      const count = kind === "emergent" ? 4 : 3;
+      for (let b = 0; b < count; b++) {
+        branches.push({
+          y: trunkHeight * (0.55 + (b / count) * 0.4) + rand() * 1.5,
+          angle: rand() * Math.PI * 2,
+          length: crownScale * (0.6 + rand() * 0.55),
+          rise: 0.25 + rand() * 0.5,
+          radius: trunkRadius * (0.28 + rand() * 0.26),
+        });
+      }
+    } else if (kind === "understory") {
+      for (let b = 0; b < 2; b++) {
+        branches.push({
+          y: trunkHeight * (0.5 + b * 0.25) + rand(),
+          angle: rand() * Math.PI * 2,
+          length: crownScale * (0.7 + rand() * 0.5),
+          rise: 0.3 + rand() * 0.5,
+          radius: trunkRadius * (0.35 + rand() * 0.2),
+        });
+      }
+    }
+
     trees.push({
       x,
       z,
@@ -491,7 +586,7 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
       trunkRadius,
       kind,
       crownScale,
-      crownCards: kind === "understory" ? 2 : 3,
+      branches,
       rotation: rand() * Math.PI * 2,
       tint: Math.floor(rand() * 6),
       lean: [(rand() - 0.5) * 0.1, (rand() - 0.5) * 0.1],
@@ -511,7 +606,26 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
     // Dans la trouée du camp, seules les herbes basses poussent : le sol reste
     // praticable, mais il n'est jamais nu.
     const roll = rand();
-    const variant: 0 | 1 | 2 | 3 = inClearing(x, z, 2) ? 3 : roll < 0.62 ? 3 : roll < 0.82 ? 0 : roll < 0.94 ? 1 : 2;
+    // Milieu ouvert (baï, berge, trouée) : herbe et couvre-sol. Sous couvert
+    // fermé : fougères, balisiers, buissons.
+    const gap = gapAt(x, z);
+    const density = densityAt(x, z);
+    // Herbe : seulement les milieux vraiment ouverts (baï, berges). Dans la
+    // trouée du camp on garde des fougères basses, pas une savane.
+    const open = density < 0.24 || gap > 0.72;
+    const variant: 0 | 1 | 2 | 3 | 4 = open
+      ? roll < 0.7
+        ? 4
+        : roll < 0.92
+          ? 3
+          : 0
+      : roll < 0.6
+        ? 3
+        : roll < 0.84
+          ? 0
+          : roll < 0.95
+            ? 1
+            : 2;
     understory.push({
       x,
       z,
@@ -519,11 +633,13 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
       scale:
         variant === 3
           ? 0.35 + rand() * 0.85
-          : variant === 1
-            ? 0.7 + rand() * 0.5
-            : variant === 2
-              ? 0.7 + rand() * 0.6
-              : 0.6 + rand() * 1.0,
+          : variant === 4
+            ? 0.5 + rand() * 0.55
+            : variant === 1
+              ? 0.7 + rand() * 0.5
+              : variant === 2
+                ? 0.7 + rand() * 0.6
+                : 0.6 + rand() * 1.0,
       rotation: rand() * Math.PI * 2,
       variant,
     });

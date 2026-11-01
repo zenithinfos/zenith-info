@@ -11,6 +11,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+import { barkMaps, groundMaps } from "./materials.mjs";
+import { Canvas, fbm, normalMap } from "./raster.mjs";
 
 /* ------------------------------------------------------------------ */
 /* Utilitaires                                                         */
@@ -40,17 +42,71 @@ function leafPath(w, h, bend = 0) {
   ].join(" ");
 }
 
-function leafMarkup({ x, y, w, h, angle, hue, sat, light, bend = 0, opacity = 1, vein = true }) {
-  const fill = `hsl(${round(hue)} ${round(sat)}% ${round(light)}%)`;
+/** Compteur d'identifiants pour les dégradés SVG (défs uniques). */
+let gradientId = 0;
+
+
+/**
+ * Feuille peinte : dégradé base→pointe, nervure médiane, nervures latérales et
+ * un reflet ténu. Une feuille en aplat suffit à faire « dessin animé » ; c'est
+ * ce travail de surface qui donne l'épaisseur du feuillage.
+ */
+function leafMarkup({
+  x,
+  y,
+  w,
+  h,
+  angle,
+  hue,
+  sat,
+  light,
+  bend = 0,
+  opacity = 1,
+  vein = true,
+  dead = false,
+}) {
+  const id = `lg${gradientId++}`;
+  const baseLight = Math.max(6, light - 13);
+  const midLight = light;
+  const tipLight = Math.min(72, light + 11);
+  const fillHue = dead ? 34 : hue;
+  const fillSat = dead ? 26 : sat;
   const parts = [
+    `<defs><linearGradient id="${id}" x1="0" y1="1" x2="0.18" y2="0">`,
+    `<stop offset="0" stop-color="hsl(${round(fillHue)} ${round(fillSat)}% ${round(baseLight)}%)"/>`,
+    `<stop offset="0.55" stop-color="hsl(${round(fillHue + 2)} ${round(fillSat)}% ${round(midLight)}%)"/>`,
+    `<stop offset="1" stop-color="hsl(${round(fillHue + 6)} ${round(fillSat + 6)}% ${round(tipLight)}%)"/>`,
+    `</linearGradient></defs>`,
     `<g transform="translate(${round(x)} ${round(y)}) rotate(${round(angle)})" opacity="${round(opacity * 100) / 100}">`,
-    `<path d="${leafPath(w, h, bend)}" fill="${fill}"/>`,
+    `<path d="${leafPath(w, h, bend)}" fill="url(#${id})"/>`,
   ];
+
   if (vein) {
+    const stroke = `hsl(${round(fillHue)} ${round(fillSat)}% ${round(Math.min(70, light + 16))}%)`;
+    // Nervure médiane.
     parts.push(
-      `<path d="M${bend},${-h * 0.92} L${bend * 0.4},${h * 0.72}" stroke="hsl(${round(hue)} ${round(sat)}% ${round(light + 12)}%)" stroke-width="${round(Math.max(0.6, w * 0.035))}" fill="none" opacity="0.55"/>`,
+      `<path d="M${bend},${round(-h * 0.92)} Q${round(bend + w * 0.06)},0 ${round(bend * 0.35)},${round(h * 0.74)}" stroke="${stroke}" stroke-width="${round(Math.max(0.7, w * 0.045))}" fill="none" opacity="0.5"/>`,
+    );
+    // Nervures latérales : elles suivent la courbure de la feuille.
+    const pairs = 4;
+    let laterals = "";
+    for (let v = 0; v < pairs; v++) {
+      const t = 0.18 + (v / pairs) * 0.62;
+      const yy = -h + t * h * 1.5;
+      const spread = w * (0.42 - t * 0.16);
+      const droop = h * 0.1;
+      laterals += `M${round(bend * 0.6)},${round(yy)} Q${round(bend + spread * 0.55)},${round(yy + droop * 0.5)} ${round(bend + spread)},${round(yy + droop)}`;
+      laterals += `M${round(bend * 0.6)},${round(yy)} Q${round(bend - spread * 0.55)},${round(yy + droop * 0.5)} ${round(bend - spread)},${round(yy + droop)}`;
+    }
+    parts.push(
+      `<path d="${laterals}" stroke="${stroke}" stroke-width="${round(Math.max(0.35, w * 0.018))}" fill="none" opacity="0.32"/>`,
+    );
+    // Reflet : une arête lumineuse près de la pointe.
+    parts.push(
+      `<path d="M${round(bend + w * 0.22)},${round(-h * 0.55)} Q${round(bend + w * 0.3)},${round(-h * 0.2)} ${round(bend + w * 0.16)},${round(h * 0.1)}" stroke="hsl(${round(fillHue + 18)} 60% ${round(Math.min(82, tipLight + 18))}%)" stroke-width="${round(Math.max(0.5, w * 0.05))}" fill="none" opacity="0.22"/>`,
     );
   }
+
   parts.push("</g>");
   return parts.join("");
 }
@@ -63,7 +119,7 @@ function leafMarkup({ x, y, w, h, angle, hue, sat, light, bend = 0, opacity = 1,
  * Bouquet de feuilles. `count` feuilles réparties en trois passes
  * (arrière-plan sombre, cœur, premiers plans plus clairs et plus nets).
  */
-function foliageSvg({ size = 512, count = 190, hue = 116, sat = 40, light = 27, seed = 11 } = {}) {
+export function foliageSvg({ size = 512, count = 190, hue = 116, sat = 40, light = 27, seed = 11 } = {}) {
   const rand = rng(seed);
   const leaves = [];
   const cx = size / 2;
@@ -80,7 +136,9 @@ function foliageSvg({ size = 512, count = 190, hue = 116, sat = 40, light = 27, 
     for (let i = 0; i < pass.n; i++) {
       // Centre de la feuille contraint dans un disque de rayon R - diagonaleFeuille,
       // sinon la découpe carrée de la texture se voit sur les plans 3D.
-      const leafW = size * (0.05 + rand() * 0.062) * pass.scaleMod;
+      // Tailles très inégales : des petites feuilles cachées aux grandes du
+      // dessus, c'est ce qui casse l'aspect « bouquet régulier ».
+      const leafW = size * (0.032 + Math.pow(rand(), 1.7) * 0.085) * pass.scaleMod;
       const leafH = leafW * (1.45 + rand() * 0.6);
       const maxR = size / 2;
       const safeR = maxR - Math.max(leafW, leafH) * 0.95 - wedge;
@@ -89,6 +147,11 @@ function foliageSvg({ size = 512, count = 190, hue = 116, sat = 40, light = 27, 
       const x = cx + Math.cos(angle) * r;
       const y = cy + Math.sin(angle) * r;
 
+      // Profondeur dans la masse : plus la feuille est près du centre, plus
+      // elle est enfouie et sombre. C'est ce qui donne du volume à la carte.
+      const depth = 1 - Math.min(1, r / Math.max(8, safeR));
+      const occlusion = -26 * Math.pow(depth, 1.4);
+
       leaves.push(
         leafMarkup({
           x,
@@ -96,10 +159,12 @@ function foliageSvg({ size = 512, count = 190, hue = 116, sat = 40, light = 27, 
           w: leafW,
           h: leafH,
           angle: (angle * 180) / Math.PI + 90 + (rand() - 0.5) * 62,
-          hue: hue + (rand() - 0.5) * 24,
-          sat: sat + (rand() - 0.5) * 14,
-          light: Math.max(11, light + pass.lightMod + (rand() - 0.5) * 12),
+          hue: hue + (rand() - 0.5) * 30,
+          sat: sat + (rand() - 0.5) * 18,
+          light: Math.max(9, light + pass.lightMod + occlusion + (rand() - 0.5) * 16),
           bend: (rand() - 0.5) * leafW * 0.3,
+          // Quelques feuilles rousses : une canopée 100 % verte sonne faux.
+          dead: rand() < 0.06,
         }),
       );
     }
@@ -115,7 +180,7 @@ function foliageSvg({ size = 512, count = 190, hue = 116, sat = 40, light = 27, 
 }
 
 /** Grandes feuilles tropicales (balisier, philodendron) en éventail. */
-function bigleafSvg({ size = 512, count = 9, seed = 29 } = {}) {
+export function bigleafSvg({ size = 512, count = 9, seed = 29 } = {}) {
   const rand = rng(seed);
   const cx = size * 0.5;
   const baseY = size * 0.98;
@@ -164,7 +229,7 @@ function bigleafSvg({ size = 512, count = 9, seed = 29 } = {}) {
  * Les folioles sont des losanges pleins qui s'appuient sur le rachis (pas de
  * feuilles détachées), et tout reste dans le cadre.
  */
-function fernSvg({ size = 512, count = 16, seed = 5 } = {}) {
+export function fernSvg({ size = 512, count = 16, seed = 5 } = {}) {
   const rand = rng(seed);
   const cx = size * 0.5;
   const baseY = size * 0.97;
@@ -268,7 +333,89 @@ function fernSvg({ size = 512, count = 16, seed = 5 } = {}) {
  * pixels semi-transparents que la quantification en palette transforme en
  * halos blancs une fois alpha-testés dans la scène 3D.
  */
-function canopySvg({ size = 768, count = 620, seed = 77 } = {}) {
+
+/** Touffe d'herbe de baï : lames fines, jaune-vert, plus hautes que larges. */
+export function grassSvg({ size = 512, blades = 46, seed = 61 } = {}) {
+  const rand = rng(seed);
+  const cx = size / 2;
+  const baseY = size * 0.96;
+  const out = [];
+
+  for (let i = 0; i < blades; i++) {
+    const baseX = cx + (rand() - 0.5) * size * 0.5;
+    const height = size * (0.35 + Math.pow(rand(), 0.7) * 0.6);
+    const tipX = baseX + (rand() - 0.5) * size * 0.34;
+    const width = size * (0.006 + rand() * 0.012);
+    const hue = 62 + rand() * 34;
+    const light = 24 + rand() * 26;
+    const sat = 38 + rand() * 26;
+    const bend = (rand() - 0.5) * size * 0.1;
+    out.push(
+      `<path d="M${round(baseX - width)},${round(baseY)} Q${round(baseX + bend)},${round(baseY - height * 0.55)} ${round(tipX)},${round(baseY - height)} Q${round(baseX + bend + width * 0.6)},${round(baseY - height * 0.5)} ${round(baseX + width)},${round(baseY)} Z" fill="hsl(${round(hue)} ${round(sat)}% ${round(light)}%)" opacity="${round((0.6 + rand() * 0.4) * 100) / 100}"/>`,
+    );
+  }
+
+  // Quelques épis plus clairs, qui accrochent la lumière.
+  for (let i = 0; i < 10; i++) {
+    const x = cx + (rand() - 0.5) * size * 0.46;
+    const y = baseY - size * (0.5 + rand() * 0.4);
+    out.push(
+      `<ellipse cx="${round(x)}" cy="${round(y)}" rx="${round(size * 0.008)}" ry="${round(size * 0.03)}" fill="hsl(${round(66 + rand() * 20)} 50% ${round(46 + rand() * 22)}%)" opacity="0.85"/>`,
+    );
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">${out.join("")}</svg>`;
+}
+
+
+/**
+ * Feuilles éparses : pas de masse centrale, juste des feuilles dispersées.
+ * Utilisée sur les cartes de bord de houppier, elle casse la silhouette
+ * « boule » et laisse passer le ciel comme une vraie frondaison.
+ */
+export function spraySvg({ size = 512, count = 90, seed = 313 } = {}) {
+  const rand = rng(seed);
+  const cx = size / 2;
+  const cy = size / 2;
+  const out = [];
+
+  // Grappes réparties en couronne : le centre reste plus clair, la carte se
+  // lit comme une frondaison trouée plutôt que comme une boule pleine.
+  for (let i = 0; i < count; i++) {
+    const a = rand() * Math.PI * 2;
+    const r = size * (0.12 + Math.pow(rand(), 0.7) * 0.34);
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r * 0.78;
+    const leafW = size * (0.03 + Math.pow(rand(), 1.5) * 0.055);
+    out.push(
+      leafMarkup({
+        x,
+        y,
+        w: leafW,
+        h: leafW * (1.4 + rand() * 0.7),
+        angle: rand() * 360,
+        hue: 104 + (rand() - 0.5) * 34,
+        sat: 34 + rand() * 16,
+        light: 16 + rand() * 24,
+        bend: (rand() - 0.5) * leafW * 0.35,
+        dead: rand() < 0.08,
+      }),
+    );
+  }
+
+  // Quelques rameaux pour relier les feuilles.
+  for (let i = 0; i < 4; i++) {
+    const a = rand() * Math.PI * 2;
+    const len = size * (0.12 + rand() * 0.14);
+    out.push(
+      `<path d="M${round(cx)},${round(cy)} L${round(cx + Math.cos(a) * len)},${round(cy + Math.sin(a) * len * 0.8)}" stroke="hsl(96 24% 15%)" stroke-width="${round(size * 0.006)}" opacity="0.75"/>`,
+    );
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">${out.join("")}</svg>`;
+}
+
+export function canopySvg({ size = 768, count = 620, seed = 77 } = {}) {
   const rand = rng(seed);
 
   const holes = Array.from({ length: 15 }, () => ({
@@ -316,127 +463,7 @@ function canopySvg({ size = 768, count = 620, seed = 77 } = {}) {
 /* Écorce et sol                                                       */
 /* ------------------------------------------------------------------ */
 
-function barkSvg({ width = 512, height = 1024, seed = 3 } = {}) {
-  const rand = rng(seed);
-  const ridges = [];
-
-  // Fond : dégradé vertical + variations.
-  const base = `<rect width="${width}" height="${height}" fill="url(#barkBase)"/>`;
-
-  for (let i = 0; i < 150; i++) {
-    const x = rand() * width;
-    const w = 3 + rand() * 26;
-    const light = 12 + rand() * 26;
-    const opacity = 0.25 + rand() * 0.55;
-    const wobble = 6 + rand() * 22;
-    const d = [
-      `M${round(x)},-20`,
-      `C${round(x + (rand() - 0.5) * wobble)},${round(height * 0.3)} ${round(x + (rand() - 0.5) * wobble)},${round(height * 0.65)} ${round(x + (rand() - 0.5) * wobble)},${height + 20}`,
-    ].join(" ");
-    ridges.push(
-      `<path d="${d}" stroke="hsl(${round(24 + rand() * 14)} ${round(18 + rand() * 16)}% ${round(light)}%)" stroke-width="${round(w)}" fill="none" opacity="${round(opacity * 100) / 100}" stroke-linecap="round"/>`,
-    );
-  }
-
-  // Crevasses sombres et lichens.
-  const cracks = Array.from({ length: 60 }, () => {
-    const x = rand() * width;
-    const y = rand() * height;
-    const len = 20 + rand() * 120;
-    return `<path d="M${round(x)},${round(y)} q${round((rand() - 0.5) * 14)},${round(len * 0.5)} ${round((rand() - 0.5) * 22)},${round(len)}" stroke="hsl(26 30% ${round(6 + rand() * 6)}%)" stroke-width="${round(1 + rand() * 3)}" fill="none" opacity="0.75"/>`;
-  });
-
-  const lichen = Array.from({ length: 26 }, () => {
-    const x = rand() * width;
-    const y = rand() * height;
-    const r = 8 + rand() * 34;
-    return `<ellipse cx="${round(x)}" cy="${round(y)}" rx="${round(r)}" ry="${round(r * (0.5 + rand() * 0.6))}" fill="hsl(${round(72 + rand() * 30)} 26% ${round(30 + rand() * 14)}%)" opacity="${round((0.1 + rand() * 0.22) * 100) / 100}"/>`;
-  });
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-    <defs>
-      <linearGradient id="barkBase" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0%" stop-color="#3a2b1d"/>
-        <stop offset="42%" stop-color="#4d3a26"/>
-        <stop offset="70%" stop-color="#3f2f20"/>
-        <stop offset="100%" stop-color="#2f2317"/>
-      </linearGradient>
-      <filter id="grain">
-        <feTurbulence type="fractalNoise" baseFrequency="0.9 0.22" numOctaves="3" seed="${seed}"/>
-        <feColorMatrix type="saturate" values="0"/>
-        <feComponentTransfer><feFuncA type="linear" slope="0.16"/></feComponentTransfer>
-      </filter>
-    </defs>
-    ${base}
-    ${ridges.join("")}
-    ${cracks.join("")}
-    ${lichen.join("")}
-    <rect width="${width}" height="${height}" filter="url(#grain)" opacity="0.55"/>
-  </svg>`;
-}
-
-function groundSvg({ size = 1024, seed = 9 } = {}) {
-  const rand = rng(seed);
-  const litter = [];
-
-  // Litière : feuilles mortes de teintes brunes/olives.
-  for (let i = 0; i < 900; i++) {
-    const x = rand() * size;
-    const y = rand() * size;
-    const w = size * (0.006 + rand() * 0.018);
-    const h = w * (1.3 + rand() * 0.8);
-    const hue = 22 + rand() * 46;
-    const light = 12 + rand() * 22;
-    litter.push(
-      `<g transform="translate(${round(x)} ${round(y)}) rotate(${round(rand() * 360)})" opacity="${round((0.35 + rand() * 0.5) * 100) / 100}">
-        <path d="${leafPath(w, h, (rand() - 0.5) * w * 0.4)}" fill="hsl(${round(hue)} ${round(22 + rand() * 26)}% ${round(light)}%)"/>
-      </g>`,
-    );
-  }
-
-  // Mousse et taches d'humus.
-  const moss = Array.from({ length: 90 }, () => {
-    const x = rand() * size;
-    const y = rand() * size;
-    const r = size * (0.012 + rand() * 0.06);
-    return `<ellipse cx="${round(x)}" cy="${round(y)}" rx="${round(r)}" ry="${round(r * (0.5 + rand() * 0.7))}" fill="hsl(${round(88 + rand() * 40)} ${round(24 + rand() * 26)}% ${round(14 + rand() * 14)}%)" opacity="${round((0.18 + rand() * 0.35) * 100) / 100}"/>`;
-  });
-
-  // Brindilles.
-  const twigs = Array.from({ length: 110 }, () => {
-    const x = rand() * size;
-    const y = rand() * size;
-    const len = size * (0.02 + rand() * 0.08);
-    const angle = rand() * Math.PI * 2;
-    return `<path d="M${round(x)},${round(y)} L${round(x + Math.cos(angle) * len)},${round(y + Math.sin(angle) * len)}" stroke="hsl(${round(24 + rand() * 16)} 26% ${round(10 + rand() * 12)}%)" stroke-width="${round(size * (0.0012 + rand() * 0.0028))}" opacity="0.7" stroke-linecap="round"/>`;
-  });
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-    <defs>
-      <linearGradient id="soil" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#3b2b1c"/>
-        <stop offset="45%" stop-color="#2e2317"/>
-        <stop offset="100%" stop-color="#221a11"/>
-      </linearGradient>
-      <filter id="noise">
-        <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="4" seed="${seed}"/>
-        <feColorMatrix type="saturate" values="0.2"/>
-        <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
-      </filter>
-    </defs>
-    <rect width="${size}" height="${size}" fill="url(#soil)"/>
-    <rect width="${size}" height="${size}" filter="url(#noise)" opacity="0.75"/>
-    ${moss.join("")}
-    ${litter.join("")}
-    ${twigs.join("")}
-  </svg>`;
-}
-
-/* ------------------------------------------------------------------ */
-/* Divers : brume, eau                                                 */
-/* ------------------------------------------------------------------ */
-
-function mistSvg({ size = 512, seed = 4 } = {}) {
+export function mistSvg({ size = 512, seed = 4 } = {}) {
   const rand = rng(seed);
   const blobs = Array.from({ length: 26 }, () => {
     const cx = size * (0.25 + rand() * 0.5);
@@ -463,7 +490,7 @@ function waterNormalSvg({ size = 256, seed = 5 } = {}) {
   </svg>`;
 }
 
-function rockSvg({ size = 512, seed = 11 } = {}) {
+export function rockSvg({ size = 512, seed = 11 } = {}) {
   const rand = rng(seed);
   const spots = Array.from({ length: 260 }, () => {
     const x = rand() * size;
@@ -495,7 +522,7 @@ function rockSvg({ size = 512, seed = 11 } = {}) {
 /* ------------------------------------------------------------------ */
 
 const RASTER = [
-  { file: "foliage.png", svg: foliageSvg({}), type: "png", label: "bouquet de feuilles" },
+  { file: "foliage.png", svg: foliageSvg({}), type: "png", label: "bouquet de feuilles", grain: { amount: 0.18, tint: 0.06 } },
   {
     file: "foliage-deep.png",
     svg: foliageSvg({ seed: 42, hue: 132, sat: 34, light: 18, count: 190 }),
@@ -503,31 +530,96 @@ const RASTER = [
     label: "feuillage de sous-bois",
   },
   {
+    file: "spray.png",
+    svg: spraySvg({}),
+    type: "png",
+    label: "feuilles éparses",
+    grain: { amount: 0.2, tint: 0.07 },
+  },
+  {
     file: "foliage-pale.png",
     svg: foliageSvg({ seed: 91, hue: 86, sat: 48, light: 40, count: 120 }),
     type: "png",
     label: "feuillage de lumière",
   },
-  { file: "bigleaf.png", svg: bigleafSvg({}), type: "png", label: "grandes feuilles" },
-  { file: "fern.png", svg: fernSvg({}), type: "png", label: "fougère" },
+  { file: "bigleaf.png", svg: bigleafSvg({}), type: "png", label: "grandes feuilles", grain: { amount: 0.18, tint: 0.06 } },
+  { file: "fern.png", svg: fernSvg({}), type: "png", label: "fougère", grain: { amount: 0.18, tint: 0.06 } },
+  { file: "grass.png", svg: grassSvg({}), type: "png", label: "herbe de baï", grain: { amount: 0.18, tint: 0.06 } },
   {
     file: "canopy.png",
     svg: canopySvg({}),
     type: "png",
-    width: 768,
-    height: 768,
+    width: 640,
+    height: 640,
     label: "canopée (vue du sol)",
   },
   { file: "mist.png", svg: mistSvg({}), type: "png", label: "brume" },
-  { file: "bark.jpg", svg: barkSvg({}), type: "jpeg", label: "écorce" },
-  { file: "ground.jpg", svg: groundSvg({}), type: "jpeg", label: "litière du sol" },
   { file: "rock.jpg", svg: rockSvg({}), type: "jpeg", label: "roche" },
   { file: "water_normal.jpg", svg: waterNormalSvg({}), type: "jpeg", label: "normales d'eau" },
 ];
 
+/**
+ * Ajoute un grain photographique aux cartes de feuillage : micro-variations de
+ * luminance et de teinte, à l'intérieur de la découpe alpha. Sans cela, les
+ * feuilles restent des aplats vectoriels — c'est le principal marqueur de
+ * « dessin animé » d'un feuillage.
+ */
+async function grainify(buffer, { amount = 0.16, tint = 0.05 } = {}) {
+  const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width, height } = info;
+  const noise = fbm(width, height, { freq: 26, octaves: 4, seed: 1234 });
+  const blotch = fbm(width, height, { freq: 7, octaves: 3, seed: 88 });
+  for (let i = 0; i < width * height; i++) {
+    const a = data[i * 4 + 3];
+    if (a === 0) continue;
+    const n = 1 + (noise[i] - 0.5) * amount * 2;
+    const warm = 1 + (blotch[i] - 0.5) * tint * 2;
+    data[i * 4] = Math.min(255, data[i * 4] * n * warm);
+    data[i * 4 + 1] = Math.min(255, data[i * 4 + 1] * n);
+    data[i * 4 + 2] = Math.min(255, data[i * 4 + 2] * n * (2 - warm));
+  }
+  return sharp(data, { raw: { width, height, channels: 4 } })
+    .png({ compressionLevel: 9, palette: true, colors: 160, effort: 8 })
+    .toBuffer();
+}
+
+/** Écrit une matière (albédo + normales) dans public/textures. */
+async function writeMaterial(dir, name, maps, { albedoQuality = 86, normalQuality = 90, log }) {
+  const { width, height, albedo, normal } = maps;
+  const albedoFile = path.join(dir, `${name}.jpg`);
+  const normalFile = path.join(dir, `${name}_normal.jpg`);
+  const albedoOut = await sharp(Buffer.from(albedo), {
+    raw: { width, height, channels: 3 },
+  })
+    .jpeg({ quality: albedoQuality, mozjpeg: true })
+    .toBuffer();
+  const normalOut = await sharp(Buffer.from(normal), {
+    raw: { width, height, channels: 3 },
+  })
+    .jpeg({ quality: normalQuality, mozjpeg: true })
+    .toBuffer();
+  await writeFile(albedoFile, albedoOut);
+  await writeFile(normalFile, normalOut);
+  log(
+    `✓ textures/${name}.jpg + ${name}_normal.jpg — ${Math.round((albedoOut.length + normalOut.length) / 1024)} Ko`,
+  );
+}
+
 export async function generateTextures({ publicDir, force = false, log = console.log } = {}) {
   const dir = path.join(publicDir, "textures");
   await mkdir(dir, { recursive: true });
+
+  // Sol et écorce : peints au pixel, avec leur carte de normales.
+  for (const [name, maps, options] of [
+    ["ground", groundMaps({ size: 1024, seed: 9 }), { normalQuality: 76 }],
+    ["bark", barkMaps({ width: 512, height: 1024, seed: 3 }), { normalQuality: 82 }],
+  ]) {
+    if (!force && existsSync(path.join(dir, `${name}.jpg`))) {
+      log(`· textures/${name}.jpg existe déjà`);
+      continue;
+    }
+    await writeMaterial(dir, name, maps, { log, ...options });
+  }
 
   for (const item of RASTER) {
     const target = path.join(dir, item.file);
@@ -545,10 +637,51 @@ export async function generateTextures({ publicDir, force = false, log = console
     const output =
       item.type === "png"
         ? await sharp(texture)
-            .png({ compressionLevel: 9, palette: true, colors: 128, effort: 8 })
+            .png({ compressionLevel: 9, palette: true, colors: 96, effort: 8 })
             .toBuffer()
         : await sharp(texture).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
-    await writeFile(target, output);
-    log(`✓ textures/${item.file} — ${item.label} (${Math.round(output.length / 1024)} Ko)`);
+    const finalOutput = item.grain ? await grainify(output, item.grain) : output;
+    await writeFile(target, finalOutput);
+    log(`✓ textures/${item.file} — ${item.label} (${Math.round(finalOutput.length / 1024)} Ko)`);
+  }
+
+  // Cartes de normales des cartes de feuillage : la luminance sert de relief.
+  // Une carte d'alpha-test éclairée à plat fait « autocollant » ; avec une
+  // normale, chaque feuille peint son propre ombrage.
+  const NORMALLED = [
+    "foliage.png",
+    "foliage-deep.png",
+    "foliage-pale.png",
+    "bigleaf.png",
+    "fern.png",
+    "grass.png",
+    "spray.png",
+  ];
+  for (const file of NORMALLED) {
+    const source = path.join(dir, file);
+    const target = path.join(dir, file.replace(/\.png$/, "_normal.jpg"));
+    if (!existsSync(source)) continue;
+    if (!force && existsSync(target)) {
+      log(`· textures/${path.basename(target)} existe déjà`);
+      continue;
+    }
+    const { data, info } = await sharp(source)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    const canvas = new Canvas(w, h);
+    for (let i = 0; i < w * h; i++) {
+      const a = data[i * 4 + 3] / 255;
+      const l = (0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]) / 255;
+      canvas.height_[i] = a > 0.25 ? l : 0;
+    }
+    const normal = normalMap(canvas, w * 0.05);
+    const out = await sharp(Buffer.from(normal), { raw: { width: w, height: h, channels: 3 } })
+      .jpeg({ quality: 82, mozjpeg: true })
+      .toBuffer();
+    await writeFile(target, out);
+    log(`✓ textures/${path.basename(target)} — normales (${Math.round(out.length / 1024)} Ko)`);
   }
 }

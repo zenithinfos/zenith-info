@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import type { Weather } from "@/game/realism";
 import {
   FOREST_PALETTE,
@@ -226,11 +231,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       path: string,
       onLoad: (texture: THREE.Texture) => void,
       repeat?: [number, number],
+      linear = false,
     ) => {
       textureLoader.load(
         path,
         (texture) => {
-          texture.colorSpace = THREE.SRGBColorSpace;
+          // Les cartes de normales sont des données, pas des couleurs : les
+          // passer en sRGB fausse l'orientation des surfaces.
+          texture.colorSpace = linear ? THREE.NoColorSpace : THREE.SRGBColorSpace;
           texture.wrapS = THREE.RepeatWrapping;
           texture.wrapT = THREE.RepeatWrapping;
           texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
@@ -318,15 +326,26 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     const groundMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      roughness: 0.97,
+      roughness: 0.96,
       metalness: 0,
       vertexColors: true,
+      normalScale: new THREE.Vector2(1.15, 1.15),
     });
     loadTexture(TEXTURES.ground, (texture) => {
-      texture.repeat.set(70, 70);
+      texture.repeat.set(48, 48);
       groundMaterial.map = texture;
       groundMaterial.needsUpdate = true;
     });
+    loadTexture(
+      TEXTURES.groundNormal,
+      (texture) => {
+        texture.repeat.set(48, 48);
+        groundMaterial.normalMap = texture;
+        groundMaterial.needsUpdate = true;
+      },
+      undefined,
+      true,
+    );
 
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     ground.receiveShadow = true;
@@ -342,7 +361,13 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
      */
     const foliageMaterial = (
       map: string | null,
-      options: { tint?: number; sway?: number; alphaTest?: number } = {},
+      options: {
+        tint?: number;
+        sway?: number;
+        alphaTest?: number;
+        normal?: string;
+        normalScale?: number;
+      } = {},
     ) => {
       const sway = options.sway ?? 0.08;
       const material = new THREE.MeshStandardMaterial({
@@ -358,6 +383,21 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           material.map = texture;
           material.needsUpdate = true;
         });
+      }
+      if (options.normal) {
+        loadTexture(
+          options.normal,
+          (texture) => {
+            material.normalMap = texture;
+            material.needsUpdate = true;
+          },
+          undefined,
+          true,
+        );
+        material.normalScale = new THREE.Vector2(
+          options.normalScale ?? 1,
+          options.normalScale ?? 1,
+        );
       }
 
       material.onBeforeCompile = (shader) => {
@@ -398,39 +438,153 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     trunkGeometry.translate(0, 0.5, 0);
     const trunkMaterial = new THREE.MeshStandardMaterial({
       color: FOREST_PALETTE.bark,
-      roughness: 0.95,
+      roughness: 0.94,
       metalness: 0,
+      normalScale: new THREE.Vector2(1.4, 1.4),
     });
     loadTexture(TEXTURES.bark, (texture) => {
-      texture.repeat.set(1, 3);
+      texture.repeat.set(2, 6);
       trunkMaterial.map = texture;
       trunkMaterial.needsUpdate = true;
     });
+    loadTexture(
+      TEXTURES.barkNormal,
+      (texture) => {
+        texture.repeat.set(2, 6);
+        trunkMaterial.normalMap = texture;
+        trunkMaterial.needsUpdate = true;
+      },
+      undefined,
+      true,
+    );
 
     const buttressGeometry = new THREE.CylinderGeometry(0.85, 1.35, 1, 7, 1, true);
     buttressGeometry.translate(0, 0.5, 0);
 
+    // Branche : cylindre unitaire couché le long de +Y, pivot à la base.
+    const branchGeometry = new THREE.CylinderGeometry(0.5, 1, 1, 5, 1, true);
+    branchGeometry.translate(0, 0.5, 0);
+
     const cardGeometry = new THREE.PlaneGeometry(1, 1);
     const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
-    const logMaterial = new THREE.MeshStandardMaterial({ color: 0x3b2d1f, roughness: 0.95 });
+    const logMaterial = new THREE.MeshStandardMaterial({
+      color: 0x6b5540,
+      roughness: 0.95,
+      normalScale: new THREE.Vector2(1.2, 1.2),
+    });
     loadTexture(TEXTURES.bark, (texture) => {
-      texture.repeat.set(1, 2);
+      texture.repeat.set(2, 4);
       logMaterial.map = texture;
       logMaterial.needsUpdate = true;
     });
+    loadTexture(
+      TEXTURES.barkNormal,
+      (texture) => {
+        texture.repeat.set(2, 4);
+        logMaterial.normalMap = texture;
+        logMaterial.needsUpdate = true;
+      },
+      undefined,
+      true,
+    );
+
+    const sprayMaterial = foliageMaterial(TEXTURES.spray, {
+      tint: 0xe4ecd8,
+      sway: 0.1,
+      normal: TEXTURES.sprayNormal,
+      normalScale: 0.9,
+    });
 
     const foliageMaterials = [
-      foliageMaterial(TEXTURES.foliage, { tint: 0xdfe8d2, sway: 0.07 }),
-      foliageMaterial(TEXTURES.foliageDeep, { tint: 0xa8bb9a, sway: 0.05 }),
-      foliageMaterial(TEXTURES.foliagePale, { tint: 0xeaf2dd, sway: 0.09 }),
+      foliageMaterial(TEXTURES.foliage, {
+        tint: 0xdfe8d2,
+        sway: 0.07,
+        normal: TEXTURES.foliageNormal,
+        normalScale: 0.85,
+      }),
+      foliageMaterial(TEXTURES.foliageDeep, {
+        tint: 0xa8bb9a,
+        sway: 0.05,
+        normal: TEXTURES.foliageDeepNormal,
+        normalScale: 0.8,
+      }),
+      foliageMaterial(TEXTURES.foliagePale, {
+        tint: 0xeaf2dd,
+        sway: 0.09,
+        normal: TEXTURES.foliagePaleNormal,
+        normalScale: 0.9,
+      }),
     ];
 
     const understoryMaterials = {
-      fern: foliageMaterial(TEXTURES.fern, { sway: 0.04, alphaTest: 0.38 }),
-      bigleaf: foliageMaterial(TEXTURES.bigleaf, { sway: 0.05, alphaTest: 0.4 }),
-      bush: foliageMaterial(TEXTURES.foliage, { tint: 0xb9c9a8, sway: 0.1, alphaTest: 0.44 }),
-      cover: foliageMaterial(TEXTURES.foliagePale, { tint: 0xa9bd94, sway: 0.06, alphaTest: 0.46 }),
+      fern: foliageMaterial(TEXTURES.fern, {
+        sway: 0.04,
+        alphaTest: 0.38,
+        normal: TEXTURES.fernNormal,
+        normalScale: 0.9,
+      }),
+      bigleaf: foliageMaterial(TEXTURES.bigleaf, {
+        sway: 0.05,
+        alphaTest: 0.4,
+        normal: TEXTURES.bigleafNormal,
+        normalScale: 0.95,
+      }),
+      bush: foliageMaterial(TEXTURES.foliage, {
+        tint: 0xb9c9a8,
+        sway: 0.1,
+        alphaTest: 0.44,
+        normal: TEXTURES.foliageNormal,
+        normalScale: 0.8,
+      }),
+      cover: foliageMaterial(TEXTURES.foliagePale, {
+        tint: 0xa9bd94,
+        sway: 0.06,
+        alphaTest: 0.46,
+        normal: TEXTURES.foliagePaleNormal,
+        normalScale: 0.7,
+      }),
+      grass: foliageMaterial(TEXTURES.grass, {
+        sway: 0.16,
+        alphaTest: 0.36,
+        normal: TEXTURES.grassNormal,
+        normalScale: 0.8,
+      }),
     };
+
+    // ------------------------------------------------------------------
+    // Ombres de contact
+    // ------------------------------------------------------------------
+    // Une tache sombre au pied de chaque tronc et de chaque plant : c'est ce
+    // qui « pose » les objets sur le sol. Sans elle, tout paraît flotter.
+    const contactTexture = (() => {
+      const size = 64;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        gradient.addColorStop(0, "rgba(0,0,0,0.85)");
+        gradient.addColorStop(0.45, "rgba(0,0,0,0.35)");
+        gradient.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    })();
+    const contactMaterial = new THREE.MeshBasicMaterial({
+      map: contactTexture,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      color: 0x0b1a10,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    const contactGeometry = new THREE.PlaneGeometry(1, 1);
+    contactGeometry.rotateX(-Math.PI / 2);
 
     const dummy = new THREE.Object3D();
     // Repères réutilisés pour coucher les dalles de couvre-sol sur la pente.
@@ -484,8 +638,63 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         group.add(trunks, buttress);
       }
 
+      // --- ombres de contact (troncs et plants)
+      const contactCount = tile.trees.length + Math.ceil(tile.understory.length / 3);
+      if (contactCount > 0) {
+        const mesh = new THREE.InstancedMesh(contactGeometry, contactMaterial, contactCount);
+        let index = 0;
+        for (const tree of tile.trees) {
+          const radius = (tree.trunkRadius * 5 + 1.4) * (tree.kind === "sapling" ? 0.55 : 1);
+          dummy.position.set(tree.x, terrainHeight(tree.x, tree.z) + 0.05, tree.z);
+          dummy.rotation.set(0, tree.rotation, 0);
+          dummy.scale.set(radius, 1, radius);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(index++, dummy.matrix);
+        }
+        for (let i = 0; i < tile.understory.length; i += 3) {
+          const plant = tile.understory[i];
+          const radius = 0.9 + plant.scale * 1.5;
+          dummy.position.set(plant.x, plant.y + 0.04, plant.z);
+          dummy.rotation.set(0, plant.rotation, 0);
+          dummy.scale.set(radius, 1, radius);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(index++, dummy.matrix);
+        }
+        mesh.count = index;
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.frustumCulled = false;
+        group.add(mesh);
+      }
+
+      // --- charpentières
+      const branches = tile.trees.flatMap((tree) => tree.branches ?? []);
+      if (branches.length > 0) {
+        const mesh = new THREE.InstancedMesh(branchGeometry, trunkMaterial, branches.length);
+        const branchSource = tile.trees.filter((tree) => (tree.branches?.length ?? 0) > 0);
+        let index = 0;
+        for (const tree of branchSource) {
+          for (const branch of tree.branches ?? []) {
+            // Le cylindre monte le long de +Y : on le couche vers l'extérieur.
+            dummy.position.set(tree.x, tree.y + branch.y, tree.z);
+            dummy.rotation.set(0, Math.PI / 2 - branch.angle, Math.PI / 2 - branch.rise, "YXZ");
+            dummy.scale.set(branch.radius, branch.length, branch.radius);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(index, dummy.matrix);
+            tintColor.setHex(0xffffff).multiplyScalar(0.82);
+            mesh.setColorAt(index, tintColor);
+            index++;
+          }
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+
       // --- cartes de feuillage, réparties en trois familles
       const families: { matrix: THREE.Matrix4; colour: THREE.Color }[][] = [[], [], []];
+      const sparseCards: { matrix: THREE.Matrix4; colour: THREE.Color }[] = [];
       for (const tree of tile.trees) {
         for (const card of crownCards(tree, tileRand)) {
           dummy.position.set(
@@ -513,13 +722,27 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           // Occlusion verticale : plus on est bas, plus on est à l'ombre du
           // couvert. C'est ce dégradé qui donne la profondeur d'une forêt.
           const ao = 0.55 + 0.45 * Math.min(1, (card.offset[1] + tree.trunkHeight * 0.4) / 14);
-          families[Math.floor(tileRand() * 3)].push({
+          const bucket = card.sparse ? sparseCards : families[Math.floor(tileRand() * 3)];
+          bucket.push({
             matrix: dummy.matrix.clone(),
             colour: new THREE.Color(
               FOLIAGE_PALETTE[Math.floor(tileRand() * FOLIAGE_PALETTE.length)],
             ).multiplyScalar((0.85 + tileRand() * 0.3) * ao),
           });
         }
+      }
+
+      if (sparseCards.length > 0) {
+        const mesh = new THREE.InstancedMesh(cardGeometry, sprayMaterial, sparseCards.length);
+        sparseCards.forEach((item, index) => {
+          mesh.setMatrixAt(index, item.matrix);
+          mesh.setColorAt(index, item.colour);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
       }
 
       families.forEach((items, family) => {
@@ -542,10 +765,19 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         bigleaf: [],
         bush: [],
         cover: [],
+        grass: [],
       };
       for (const plant of tile.understory) {
         const key =
-          plant.variant === 1 ? "bigleaf" : plant.variant === 2 ? "bush" : plant.variant === 3 ? "cover" : "fern";
+          plant.variant === 1
+            ? "bigleaf"
+            : plant.variant === 2
+              ? "bush"
+              : plant.variant === 3
+                ? "cover"
+                : plant.variant === 4
+                  ? "grass"
+                  : "fern";
         for (const card of plantCards(plant)) {
           dummy.position.set(card.x, card.y, card.z);
           if (card.flat && card.slope) {
@@ -973,10 +1205,93 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      composer?.setSize(width, height);
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(mount);
+
+    // ------------------------------------------------------------------
+    // Post-traitement
+    // ------------------------------------------------------------------
+    // Sans cette chaîne, l'image sort « en aplats » : pas d'occlusion, pas de
+    // halo sur les trouées de lumière, pas de grain. C'est ce qui sépare un
+    // rendu de jeu d'une photographie de forêt.
+    const useComposer = !isMobile && !reduced;
+    let composer: EffectComposer | null = null;
+    let gradePass: ShaderPass | null = null;
+    let bloomPass: UnrealBloomPass | null = null;
+
+    if (useComposer) {
+      const target = new THREE.WebGLRenderTarget(1, 1, {
+        type: THREE.HalfFloatType,
+        samples: 4,
+      });
+      composer = new EffectComposer(renderer, target);
+      composer.addPass(new RenderPass(scene, camera));
+
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.28, 0.75, 0.82);
+      composer.addPass(bloomPass);
+
+      // Étalonnage : vignettage, grain fin, désaturation des verts et léger
+      // réchauffement des hautes lumières. Tout ce qu'un appareil photo fait.
+      gradePass = new ShaderPass({
+        uniforms: {
+          tDiffuse: { value: null },
+          uTime: { value: 0 },
+          uVignette: { value: 0.55 },
+          uGrain: { value: 0.035 },
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D tDiffuse;
+          uniform float uTime;
+          uniform float uVignette;
+          uniform float uGrain;
+          varying vec2 vUv;
+
+          float rand(vec2 co) {
+            return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+          }
+
+          void main() {
+            vec3 colour = texture2D(tDiffuse, vUv).rgb;
+
+            // Légère désaturation : une forêt filmée n'est jamais aussi
+            // saturée qu'un dessin.
+            float luma = dot(colour, vec3(0.299, 0.587, 0.114));
+            colour = mix(vec3(luma), colour, 0.86);
+
+            // Réchauffement des lumières, refroidissement des ombres.
+            colour += vec3(0.035, 0.018, -0.012) * smoothstep(0.45, 1.0, luma);
+            colour += vec3(-0.012, 0.0, 0.02) * (1.0 - smoothstep(0.0, 0.45, luma));
+
+            // Contraste en S, très léger.
+            colour = clamp((colour - 0.5) * 1.06 + 0.5, 0.0, 1.0);
+
+            // Vignettage.
+            vec2 d = vUv - 0.5;
+            float vig = 1.0 - dot(d, d) * uVignette * 2.2;
+            colour *= clamp(vig, 0.0, 1.0);
+
+            // Grain : casse les dégradés du brouillard.
+            float grain = (rand(vUv * 1024.0 + uTime * 60.0) - 0.5) * uGrain;
+            colour += grain;
+
+            gl_FragColor = vec4(colour, 1.0);
+          }
+        `,
+      });
+      composer.addPass(gradePass);
+      composer.addPass(new OutputPass());
+      composer.setSize(mount.clientWidth || 1, mount.clientHeight || 1);
+    }
 
     // ------------------------------------------------------------------
     // Boucle de rendu
@@ -1098,7 +1413,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       sun.target.position.set(camera.position.x, 0, camera.position.z);
       sun.target.updateMatrixWorld();
 
-      renderer.render(scene, camera);
+      if (composer) {
+        gradePass!.uniforms.uTime.value = elapsed;
+        // Le bloom ne doit exister qu'en plein jour : la nuit, il baverait.
+        bloomPass!.strength = 0.06 + daylight * 0.24;
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
     };
     animate();
 
@@ -1217,6 +1539,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         });
         textures.forEach((texture) => texture.dispose());
         shaftTexture.dispose();
+        contactTexture.dispose();
+        composer?.dispose();
         renderer.dispose();
         if (renderer.domElement.parentElement === mount) {
           mount.removeChild(renderer.domElement);
