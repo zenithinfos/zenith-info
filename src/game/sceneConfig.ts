@@ -71,7 +71,13 @@ export const SCENE_CONFIG: SceneConfig = {
   camera: { fov: 62, near: 0.1, far: 700, height: 2.2 },
 };
 
-/** Ajuste brouillard, exposition et lumières selon l'heure du monde. */
+/**
+ * Ajuste brouillard, exposition et lumières selon l'heure du monde.
+ *
+ * Deuxième entrée dans les mêmes réglages — utile aux outils (bande-annonce,
+ * aperçus) qui n'ont pas de scène three.js. Le jeu, lui, passe par
+ * `lightForDaylight` pour que le direct et cet outil ne divergent pas.
+ */
 export function configForHour(
   base: SceneConfig,
   hour: number,
@@ -93,22 +99,62 @@ export function configForHour(
         ? FOREST_PALETTE.skyDusk
         : FOREST_PALETTE.skyNight;
 
-  const densityFactor = weather === "brume" ? 1.9 : weather === "orage" ? 1.45 : weather === "pluie" ? 1.25 : 1;
+  const weatherFactor = weather === "brume" ? 1.9 : weather === "orage" ? 1.45 : weather === "pluie" ? 1.25 : 1;
+  const light = lightForDaylight(daylight, weatherFactor);
 
   return {
     ...base,
     background: sky,
     fog: {
       color: daylight < 0.2 ? FOREST_PALETTE.fogNight : FOREST_PALETTE.fogDay,
-      density: base.fog.density * densityFactor * (1.6 - daylight * 0.6),
+      density: light.fogDensity,
     },
     lighting: {
       ...base.lighting,
-      ambient: { ...base.lighting.ambient, intensity: 0.12 + daylight * 0.35 },
-      sun: { ...base.lighting.sun, intensity: 0.05 + daylight * 2.1 },
-      moon: { ...base.lighting.moon, intensity: (1 - daylight) * 0.4 },
+      ambient: { ...base.lighting.ambient, intensity: light.ambient },
+      sun: { ...base.lighting.sun, intensity: light.sun },
+      hemisphere: { ...base.lighting.hemisphere, intensity: light.hemisphere },
+      moon: { ...base.lighting.moon, intensity: light.moon },
     },
-    exposure: 0.75 + daylight * 0.4,
+    exposure: light.exposure,
+  };
+}
+
+/**
+ * Budget lumineux pour un moment de la journée.
+ *
+ * Une forêt dense pose un problème d'exposition : le soleil est presque
+ * entièrement intercepté par la canopée, et un sous-bois réel n'est éclairé que
+ * par le ciel — 2 à 5 % de la lumière du plein air. Rendu tel quel, un jeu
+ * paraît noir : l'œil s'adapte, pas une caméra.
+ *
+ * D'où une règle : le soleil garde la vedette sur les trouées, mais le plancher
+ * d'ombre (ciel + ambiance + environnement) est remonté jusqu'à ce qu'une
+ * feuille à l'ombre lise encore sa couleur. Ces valeurs sont vérifiables sans
+ * GPU : `scripts/check-light.mjs` calcule la luminance estimée d'une feuille et
+ * d'un tronc pour un moment donné.
+ */
+export interface LightBudget {
+  sun: number;
+  ambient: number;
+  hemisphere: number;
+  moon: number;
+  exposure: number;
+  environment: number;
+  fogDensity: number;
+}
+
+export function lightForDaylight(daylight: number, weatherFactor = 1): LightBudget {
+  const d = Math.max(0, Math.min(1, daylight));
+  return {
+    sun: 0.05 + d * 2.3,
+    // Le plancher d'ombre : c'est lui qui décide si la forêt est lisible.
+    ambient: 0.4 + d * 0.86,
+    hemisphere: 0.44 + d * 1.22,
+    moon: (1 - d) * 0.55,
+    exposure: 1.02 + d * 0.43,
+    environment: 0.62 + d * 0.6,
+    fogDensity: (0.016 - d * 0.007) * weatherFactor,
   };
 }
 

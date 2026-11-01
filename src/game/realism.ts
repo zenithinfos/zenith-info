@@ -74,7 +74,7 @@ export interface WorldClock {
 export function worldClock(
   elapsedSeconds: number,
   settings: RealismSettings = DEFAULT_REALISM,
-  startHour = 6.5,
+  startHour = 8.2,
 ): WorldClock {
   const hourPerSecond = 24 / (settings.dayLengthMinutes * 60);
   const raw = startHour + elapsedSeconds * hourPerSecond;

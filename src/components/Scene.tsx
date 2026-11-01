@@ -12,6 +12,7 @@ import {
   FOREST_PALETTE,
   SCENE_CONFIG,
   TEXTURES,
+  lightForDaylight,
   qualityBudget,
 } from "@/game/sceneConfig";
 import { WATER_BODIES, rainParams, waterDepthAt, waterLevelAt } from "@/game/water";
@@ -392,8 +393,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       gradient.addColorStop(0, "#7fa8c4"); // zénith
       gradient.addColorStop(0.42, "#a8c0c4");
       gradient.addColorStop(0.5, "#e6dcb8"); // horizon chaud
-      gradient.addColorStop(0.56, "#5c7048");
-      gradient.addColorStop(1, "#1a2416"); // sol de forêt
+      gradient.addColorStop(0.56, "#6d8256");
+      // Le bas de la sphère éclaire tous les dessous de feuilles : presque noir,
+      // il éteint la moitié de la forêt. Un vert de sol de forêt, lui, renvoie
+      // la lumière que la canopée ne laisse pas passer.
+      gradient.addColorStop(1, "#3a4a2e"); // sol de forêt
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -409,7 +413,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     })();
     if (environment) {
       scene.environment = environment.envMap;
-      scene.environmentIntensity = 0.45;
+      // Valeur de départ ; `setEnvironment` la recale sur le moment du jour.
+      scene.environmentIntensity = 0.9;
     }
     const environmentEquirect = environment?.equirect ?? null;
 
@@ -437,12 +442,15 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const z = groundPositions.getZ(i);
       groundPositions.setY(i, terrainHeight(x, z));
 
-      // Ombre de canopée : plus la forêt est dense, plus le sol est sombre.
+      // Ombre de canopée : plus la forêt est dense, plus le sol est sombre —
+      // mais ces couleurs *multiplient* déjà la texture : trop basses, elles
+      // éteignent complètement la litière. Elles servent donc à varier, pas à
+      // assombrir.
       const density = densityAt(x, z);
-      const exposure = 0.45 + (1 - density) * 0.85;
+      const exposure = 0.62 + (1 - density) * 0.5;
       // Légère variation pour éviter un aplat.
-      const grain = 0.92 + random() * 0.16;
-      colour.setRGB(0.34 * exposure * grain, 0.3 * exposure * grain, 0.22 * exposure * grain);
+      const grain = 0.94 + random() * 0.12;
+      colour.setRGB(0.94 * exposure * grain, 0.86 * exposure * grain, 0.68 * exposure * grain);
       groundColours[i * 3] = colour.r;
       groundColours[i * 3 + 1] = colour.g;
       groundColours[i * 3 + 2] = colour.b;
@@ -451,7 +459,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     groundGeometry.computeVertexNormals();
 
     const groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
+      // La carte de litière est une photo sombre (moyenne 47/38/24) : sans ce
+      // gain, le sol reste noir quel que soit l'éclairage. Une albédo au-dessus
+      // de 1 n'est pas physique, elle compense une photo exposée pour le plein
+      // air et non pour un sous-bois.
+      color: new THREE.Color(1.8, 1.7, 1.55),
       roughness: 0.96,
       metalness: 0,
       vertexColors: true,
@@ -595,7 +607,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     const trunkGeometry = new THREE.CylinderGeometry(0.62, 1, 1, 8, 1, true);
     trunkGeometry.translate(0, 0.5, 0);
     const trunkMaterial = new THREE.MeshStandardMaterial({
-      color: FOREST_PALETTE.bark,
+      // La carte d'écorce est déjà brune : la teinter d'un brun sombre la
+      // rendait noire. On l'éclaircit au contraire.
+      color: 0xc9c2b2,
       roughness: 0.94,
       metalness: 0,
       normalScale: new THREE.Vector2(1.4, 1.4),
@@ -619,7 +633,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     const cardGeometry = new THREE.PlaneGeometry(1, 1);
     const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
     const logMaterial = new THREE.MeshStandardMaterial({
-      color: 0x6b5540,
+      color: 0xbfb49e,
       roughness: 0.95,
       normalScale: new THREE.Vector2(1.2, 1.2),
     });
@@ -1517,7 +1531,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         uniforms: {
           tDiffuse: { value: null },
           uTime: { value: 0 },
-          uVignette: { value: 0.55 },
+          uVignette: { value: 0.3 },
           uGrain: { value: 0.035 },
         },
         vertexShader: `
@@ -1566,8 +1580,13 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           }
         `,
       });
-      composer.addPass(gradePass);
+      // L'étalonnage vient APRÈS la conversion en espace d'affichage. Avant,
+      // sa courbe en S s'appliquait à des valeurs linéaires : soustraire 0,5 à
+      // une luminance linéaire de sous-bois (0,03) revenait à éteindre l'image,
+      // et le vignettage achevait le travail. C'est ce qui rendait la forêt
+      // noire alors que les lumières étaient correctes.
       composer.addPass(new OutputPass());
+      composer.addPass(gradePass);
       composer.setSize(mount.clientWidth || 1, mount.clientHeight || 1);
     }
 
@@ -1844,10 +1863,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         if (wet) fogColour.lerp(new THREE.Color(0x6b7d6d), 0.4);
         fog.color.lerp(fogColour, 0.1);
 
-        // Densité : 0,030 dans la brume épaisse, 0,009 en plein jour dégagé.
         const weatherFactor = weather === "brume" ? 1.9 : wet ? 1.35 : 1;
-        const density = (0.019 - value * 0.008) * weatherFactor;
-        fog.density = THREE.MathUtils.lerp(fog.density, density, 0.08);
+        const budget = lightForDaylight(value, weatherFactor);
+        fog.density = THREE.MathUtils.lerp(fog.density, budget.fogDensity, 0.08);
 
         const sky = new THREE.Color(
           value > 0.55 ? FOREST_PALETTE.skyDay : value > 0.15 ? FOREST_PALETTE.skyDusk : FOREST_PALETTE.skyNight,
@@ -1855,11 +1873,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         (skyMaterial.uniforms.uTop.value as THREE.Color).lerp(sky, 0.08);
         (skyMaterial.uniforms.uHorizon.value as THREE.Color).lerp(fog.color, 0.5);
 
-        sun.intensity = 0.04 + value * 1.6;
-        ambient.intensity = 0.18 + value * 0.32;
-        hemisphere.intensity = 0.25 + value * 0.5;
-        moon.intensity = (1 - value) * 0.5;
-        renderer.toneMappingExposure = 0.82 + value * 0.3;
+        sun.intensity = budget.sun;
+        ambient.intensity = budget.ambient;
+        hemisphere.intensity = budget.hemisphere;
+        moon.intensity = budget.moon;
+        renderer.toneMappingExposure = budget.exposure;
+        // La carte d'ambiance est la seule lumière qui atteint le sous-bois :
+        // baissée, elle éteint la forêt même en plein jour.
+        scene.environmentIntensity = budget.environment;
         // Lampe frontale : elle n'éclaire vraiment que lorsque la nuit tombe.
         viewModel.setLamp(0.08 + (1 - value) * 0.85);
 
