@@ -8,8 +8,10 @@ import TouchControls, { type TouchVector } from "./TouchControls";
 import LoadingScreen from "./LoadingScreen";
 import {
   type GameState,
+  type HuntState,
   type InputState,
   deserialize,
+  initialHunt,
   newGame,
   serialize,
   step,
@@ -18,7 +20,23 @@ import {
 import { CHARACTERS, getCharacter } from "@/game/characters";
 import { getZone } from "@/game/levels";
 import { worldClock } from "@/game/realism";
-import { faunaScore } from "@/game/fauna";
+import { faunaScore, getSpecies } from "@/game/fauna";
+import {
+  type Animal,
+  ANIMAL_BUILDS,
+  harvest,
+  nearestCarcass,
+  stepHerd,
+} from "@/game/animals";
+import {
+  WEAPONS,
+  type WeaponId,
+  fireWeapon,
+  getWeapon,
+  reloadWeapon,
+  weaponStateOf,
+  aimTarget,
+} from "@/game/hunting";
 import { MinkebeNet, type RemotePlayer, type RoomInfo } from "@/game/net";
 import { speakLine, linesFor, voiceAvailable } from "@/game/voice";
 import { ambientLine } from "@/game/whimsy";
@@ -85,6 +103,16 @@ export default function MinkebeGame() {
   const lastAmbientRef = useRef(0);
   const runningRef = useRef(false);
 
+  // --- chasse
+  const animalsRef = useRef<Animal[]>([]);
+  const huntRef = useRef<HuntState>(initialHunt());
+  const lastShotRef = useRef(0);
+  const firingRef = useRef(false);
+  const fireRef = useRef<() => void>(() => {});
+  const [hitMarker, setHitMarker] = useState<"none" | "hit" | "kill">("none");
+  const [targetLabel, setTargetLabel] = useState<string | null>(null);
+  const [carcassNear, setCarcassNear] = useState<string | null>(null);
+
   const pushToast = useCallback((toast: Omit<Toast, "id">) => {
     const id = Date.now() + Math.random();
     setToasts((current) => [...current.slice(-3), { ...toast, id }]);
@@ -125,6 +153,145 @@ export default function MinkebeGame() {
   }, [phase, voiceOn]);
 
   // ------------------------------------------------------------------
+  // Chasse : arme en main, tir, rechargement, dépeçage
+  // ------------------------------------------------------------------
+  const commitHunt = useCallback((next: HuntState) => {
+    huntRef.current = next;
+    stateRef.current = { ...stateRef.current, hunt: next };
+  }, []);
+
+  const equip = useCallback(
+    (id: WeaponId) => {
+      const arsenal = { ...huntRef.current.arsenal, current: id };
+      commitHunt({ ...huntRef.current, arsenal });
+      sceneRef.current?.setWeapon(id);
+    },
+    [commitHunt],
+  );
+
+  const fire = useCallback(() => {
+    const controller = sceneRef.current;
+    if (!controller) return;
+    const arsenal = huntRef.current.arsenal;
+    const weapon = getWeapon(arsenal.current);
+
+    // Chargeur vide : on recharge plutôt que de laisser cliquer dans le vide.
+    if (weapon.kind === "feu" && weaponStateOf(arsenal, weapon.id).loaded === 0) {
+      const reloaded = reloadWeapon(arsenal, weapon.id);
+      if (reloaded !== arsenal && weaponStateOf(reloaded, weapon.id).loaded > 0) {
+        commitHunt({ ...huntRef.current, arsenal: reloaded });
+        pushToast({
+          title: "Rechargement",
+          detail: `${weapon.short} · ${weaponStateOf(reloaded, weapon.id).loaded} balles`,
+          tone: "info",
+        });
+      }
+      return;
+    }
+
+    const { report, arsenal: nextArsenal, lastShotAt } = fireWeapon(
+      weapon.id,
+      arsenal,
+      animalsRef.current,
+      controller.getAim(),
+      performance.now(),
+      lastShotRef.current,
+    );
+    lastShotRef.current = lastShotAt;
+    if (!report.fired) return;
+
+    controller.fireFeedback(weapon.id);
+    commitHunt({ ...huntRef.current, arsenal: nextArsenal, shots: huntRef.current.shots + 1 });
+
+    if (report.hit) {
+      const species = getSpecies(report.hit.speciesId);
+      setHitMarker(report.hit.killed ? "kill" : "hit");
+      window.setTimeout(() => setHitMarker("none"), report.hit?.killed ? 420 : 180);
+      if (report.hit.killed) {
+        const build = ANIMAL_BUILDS[report.hit.speciesId];
+        const kills = { ...huntRef.current.kills };
+        kills[report.hit.speciesId] = (kills[report.hit.speciesId] ?? 0) + 1;
+        commitHunt({ ...huntRef.current, kills });
+        pushToast({
+          title: `${species?.emoji ?? "🎯"} ${species?.name ?? "Animal"} abattu`,
+          detail: `${report.hit.headshot ? "Tir à la tête · " : ""}${build?.meat ?? 0} kg à dépecer`,
+          tone: "succes",
+        });
+      }
+    }
+  }, [commitHunt, pushToast]);
+
+  useEffect(() => {
+    fireRef.current = fire;
+  }, [fire]);
+
+  const reload = useCallback(() => {
+    const arsenal = huntRef.current.arsenal;
+    const next = reloadWeapon(arsenal, arsenal.current);
+    if (next === arsenal) return;
+    commitHunt({ ...huntRef.current, arsenal: next });
+    const weapon = getWeapon(arsenal.current);
+    pushToast({ title: `${weapon.short} rechargé`, tone: "info" });
+  }, [commitHunt, pushToast]);
+
+  const skinCarcass = useCallback(() => {
+    const player = stateRef.current.player.position;
+    const carcass = nearestCarcass(animalsRef.current, player[0], player[2], 3.6);
+    if (!carcass) return;
+    const result = harvest(carcass);
+    if (!result) return;
+    commitHunt({ ...huntRef.current, meat: huntRef.current.meat + result.meat });
+    setCarcassNear(null);
+    pushToast({
+      title: `Dépeçage · +${result.meat} kg`,
+      detail: `${result.name} — viande au sac : ${Math.round(huntRef.current.meat + result.meat)} kg`,
+      tone: "succes",
+    });
+  }, [commitHunt, pushToast]);
+
+  const actionsRef = useRef({
+    equip: (id: WeaponId) => {
+      void id;
+    },
+    reload: () => {},
+    skin: () => {},
+  });
+  useEffect(() => {
+    actionsRef.current = { equip, reload, skin: skinCarcass };
+  }, [equip, reload, skinCarcass]);
+
+  // Tir automatique : on maintient la gâchette, la cadence est gérée par l'arme.
+  useEffect(() => {
+    if (phase !== "jeu") {
+      firingRef.current = false;
+      return;
+    }
+    const onDown = (event: MouseEvent) => {
+      if (document.pointerLockElement === null) return;
+      if (event.button === 0) {
+        firingRef.current = true;
+        fireRef.current();
+      }
+      if (event.button === 2) sceneRef.current?.setAiming(true);
+    };
+    const onUp = (event: MouseEvent) => {
+      if (event.button === 0) firingRef.current = false;
+      if (event.button === 2) sceneRef.current?.setAiming(false);
+    };
+    const onContext = (event: MouseEvent) => event.preventDefault();
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("contextmenu", onContext);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("contextmenu", onContext);
+      firingRef.current = false;
+      sceneRef.current?.setAiming(false);
+    };
+  }, [phase]);
+
+  // ------------------------------------------------------------------
   // Boucle de jeu
   // ------------------------------------------------------------------
   useEffect(() => {
@@ -147,17 +314,52 @@ export default function MinkebeGame() {
       stateRef.current = result.state;
 
       const controller = sceneRef.current;
+      const clockNow = worldClock(result.state.elapsed, result.state.settings);
       if (controller) {
         const player = result.state.player;
         controller.setPlayer(player.position, player.heading, player.motion);
-        const clock = worldClock(result.state.elapsed, result.state.settings);
         controller.setEnvironment({
-          hour: clock.hour,
-          daylight: clock.daylight,
+          hour: clockNow.hour,
+          daylight: clockNow.daylight,
           weather: result.state.weather.current,
           intensity: result.state.weather.intensity,
         });
       }
+
+      // Faune : la harde vit autour du joueur, que le rendu soit prêt ou non.
+      const moving = result.state.player.motion !== "idle";
+      const herd = stepHerd(
+        animalsRef.current,
+        {
+          player: [result.state.player.position[0], result.state.player.position[2]],
+          noise:
+            result.state.player.motion === "run"
+              ? 8
+              : result.state.player.motion === "sneak"
+                ? 1
+                : moving
+                  ? 3
+                  : 0,
+          hour: clockNow.hour,
+          weather: result.state.weather.current,
+          zoneId: result.state.zoneId,
+        },
+        dt,
+      );
+      animalsRef.current = herd.animals;
+      controller?.setAnimals(herd.animals);
+
+      // Une panthère qui charge et vous atteint entame la santé.
+      for (const animal of herd.animals) {
+        if (animal.state !== "charge") continue;
+        const dx = animal.x - result.state.player.position[0];
+        const dz = animal.z - result.state.player.position[2];
+        if (Math.hypot(dx, dz) < 2.2) {
+          result.state.vitals.health = Math.max(0, result.state.vitals.health - dt * 14);
+        }
+      }
+
+      if (firingRef.current) fireRef.current();
 
       netRef.current?.send(
         result.state.player.position,
@@ -177,6 +379,28 @@ export default function MinkebeGame() {
       if (nowMs - lastHudRef.current > 140) {
         lastHudRef.current = nowMs;
         setHud(result.state);
+        if (controller) {
+          const aimed = aimTarget(herd.animals, controller.getAim(), 70);
+          const aimedSpecies = aimed ? getSpecies(aimed.speciesId) : null;
+          setTargetLabel(
+            aimed && aimedSpecies
+              ? `${aimedSpecies.name} · ${Math.round(
+                  Math.hypot(
+                    aimed.x - result.state.player.position[0],
+                    aimed.z - result.state.player.position[2],
+                  ),
+                )} m`
+              : null,
+          );
+          const carcass = nearestCarcass(
+            herd.animals,
+            result.state.player.position[0],
+            result.state.player.position[2],
+            3.6,
+          );
+          const carcassSpecies = carcass ? getSpecies(carcass.speciesId) : null;
+          setCarcassNear(carcassSpecies ? carcassSpecies.name : null);
+        }
       }
       if (nowMs - lastAmbientRef.current > 14000) {
         lastAmbientRef.current = nowMs;
@@ -215,6 +439,18 @@ export default function MinkebeGame() {
         event.preventDefault();
       }
       if (event.code === "KeyM") setShowMap((value) => !value);
+      if (event.code.startsWith("Digit")) {
+        const index = Number(event.code.slice(5)) - 1;
+        const weapon = WEAPONS[index];
+        if (weapon) actionsRef.current.equip(weapon.id);
+      }
+      if (event.code === "KeyR") actionsRef.current.reload();
+      if (event.code === "KeyE") actionsRef.current.skin();
+      if (event.code === "Space") {
+        firingRef.current = true;
+        fireRef.current();
+        event.preventDefault();
+      }
       if (event.code === "Escape") {
         setPhase((current) => (current === "jeu" ? "pause" : current === "pause" ? "jeu" : current));
       }
@@ -224,6 +460,7 @@ export default function MinkebeGame() {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") firingRef.current = false;
       const mapped = keyMap[event.code];
       if (mapped) {
         (inputRef.current[mapped] as boolean) = false;
@@ -232,6 +469,7 @@ export default function MinkebeGame() {
     };
 
     const onBlur = () => {
+      firingRef.current = false;
       inputRef.current = {
         forward: false,
         backward: false,
@@ -340,6 +578,8 @@ export default function MinkebeGame() {
           pushToast({ title: "Aucune sauvegarde", detail: "Nouvelle expédition lancée.", tone: "info" });
         }
       }
+      huntRef.current = stateRef.current.hunt;
+      animalsRef.current = [];
       setHud(stateRef.current);
       setLoadingProgress(0);
       setPhase("chargement");
@@ -428,6 +668,10 @@ export default function MinkebeGame() {
   const clock = hud ? worldClock(hud.elapsed, hud.settings) : worldClock(0);
   const zone = hud ? getZone(hud.zoneId) : undefined;
   const character = getCharacter(characterId as "michelle");
+  const arsenal = hud?.hunt.arsenal ?? huntRef.current.arsenal;
+  const heldWeapon = getWeapon(arsenal.current);
+  const heldAmmo = weaponStateOf(arsenal, heldWeapon.id);
+  const totalKills = Object.values(hud?.hunt.kills ?? {}).reduce((sum, n) => sum + n, 0);
 
   const waypoints: Waypoint[] = useMemo(() => {
     if (!hud) return [];
@@ -477,6 +721,8 @@ export default function MinkebeGame() {
           <Scene
             onReady={(controller) => {
               sceneRef.current = controller;
+              controller.setWeapon(huntRef.current.arsenal.current);
+              controller.setAnimals(animalsRef.current);
             }}
             onError={(message) =>
               pushToast({ title: "Rendu 3D limité", detail: message, tone: "alerte" })
@@ -511,11 +757,93 @@ export default function MinkebeGame() {
                       {hud.score} pts · niveau {hud.level}
                     </p>
                   </div>
+                  <div className="panel-tight px-3 py-2 text-right">
+                    <p className="eyebrow">Tableau de chasse</p>
+                    <p className="text-sm font-semibold text-parchment">
+                      {Math.round(hud.hunt.meat)} kg de viande
+                    </p>
+                    <p className="text-[0.65rem] text-mist/60">
+                      {totalKills} bête{totalKills > 1 ? "s" : ""} · {hud.hunt.shots} coups tirés
+                    </p>
+                  </div>
                   <CompassBar heading={hud.player.heading} waypoints={waypoints} className="w-56 md:w-72" />
                 </div>
               </div>
 
+              {/* Barre d'armes */}
+              <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 md:top-4">
+                <div className="flex items-center gap-1 rounded-full border border-mist/15 bg-canopy-950/70 px-1.5 py-1 backdrop-blur">
+                  {WEAPONS.map((entry, index) => {
+                    const active = entry.id === arsenal.current;
+                    const ammo = weaponStateOf(arsenal, entry.id);
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => equip(entry.id)}
+                        className={`flex items-center gap-1 rounded-full px-2 py-1 text-[0.6rem] transition ${
+                          active
+                            ? "bg-amber-glow/25 text-parchment"
+                            : "text-mist/60 hover:text-parchment"
+                        }`}
+                        aria-pressed={active}
+                      >
+                        <span className="opacity-45">{index + 1}</span>
+                        <span className="hidden sm:inline">{entry.short}</span>
+                        <span className="sm:hidden">{entry.short.slice(0, 3)}</span>
+                        {entry.kind === "feu" && (
+                          <span className="opacity-50">{ammo.loaded}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Réticule, cible et munitions */}
+              <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+                <div className="relative h-7 w-7">
+                  <span className="absolute left-1/2 top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-parchment/85" />
+                  <span className="absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 bg-parchment/55" />
+                  <span className="absolute bottom-0 left-1/2 h-2 w-px -translate-x-1/2 bg-parchment/55" />
+                  <span className="absolute left-0 top-1/2 h-px w-2 -translate-y-1/2 bg-parchment/55" />
+                  <span className="absolute right-0 top-1/2 h-px w-2 -translate-y-1/2 bg-parchment/55" />
+                  {hitMarker !== "none" && (
+                    <span
+                      className={`absolute inset-0 grid place-items-center text-lg leading-none ${
+                        hitMarker === "kill" ? "text-laterite-400" : "text-parchment"
+                      }`}
+                    >
+                      ✕
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="pointer-events-none absolute inset-x-0 top-[57%] z-10 flex flex-col items-center gap-1">
+                {targetLabel && (
+                  <p className="rounded-full bg-canopy-950/60 px-2.5 py-0.5 text-[0.65rem] text-parchment/85 backdrop-blur">
+                    {targetLabel}
+                  </p>
+                )}
+                <p className="font-mono text-[0.68rem] tracking-wide text-parchment/75">
+                  {heldWeapon.kind === "feu"
+                    ? `${heldAmmo.loaded} / ${heldAmmo.reserve}`
+                    : "lame"}
+                </p>
+              </div>
+
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-2 p-3 md:p-4">
+                {carcassNear && (
+                  <button
+                    type="button"
+                    onClick={skinCarcass}
+                    className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-glow/50 bg-canopy-950/80 px-3 py-1.5 text-xs text-parchment backdrop-blur"
+                  >
+                    🔪 Dépecer · {carcassNear}
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans">E</kbd>
+                  </button>
+                )}
                 {showHints && (
                   <div className="pointer-events-none flex flex-wrap items-center justify-center gap-1.5 rounded-full bg-canopy-950/70 px-3 py-1.5 text-[0.62rem] text-mist/75 backdrop-blur">
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">ZQSD</kbd>
@@ -527,7 +855,16 @@ export default function MinkebeGame() {
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Ctrl</kbd>
                     <span>s&apos;accroupir</span>
                     <span className="text-mist/30">·</span>
-                    <span>clic : regarder autour</span>
+                    <span>clic droit : épauler</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">clic</kbd>
+                    <span>tirer</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">1-5</kbd>
+                    <span>armes</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">R</kbd>
+                    <span>recharger</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Échap</kbd>
                     <span>pause</span>
@@ -570,6 +907,36 @@ export default function MinkebeGame() {
                 }}
               />
 
+              {/* Boutons de tir (tactile) */}
+              <div className="absolute bottom-44 right-4 z-20 flex flex-col items-end gap-2 md:hidden">
+                <button
+                  type="button"
+                  onClick={reload}
+                  className="grid h-11 w-11 place-items-center rounded-full border border-mist/25 bg-canopy-900/70 text-sm backdrop-blur active:scale-95"
+                  aria-label="Recharger"
+                >
+                  🔄
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    firingRef.current = true;
+                    fire();
+                  }}
+                  onPointerUp={() => {
+                    firingRef.current = false;
+                  }}
+                  onPointerLeave={() => {
+                    firingRef.current = false;
+                  }}
+                  className="grid h-20 w-20 place-items-center rounded-full border border-laterite-400/60 bg-laterite-500/30 text-xs font-semibold uppercase tracking-wider text-parchment backdrop-blur active:scale-95"
+                  aria-label="Tirer"
+                >
+                  Tirer
+                </button>
+              </div>
+
               {showMap && hud && (
                 <div className="absolute right-3 top-32 z-20 w-64 md:right-5 md:w-80">
                   <GpsMap
@@ -593,8 +960,8 @@ export default function MinkebeGame() {
                   Entrez dans l&apos;une des dernières forêts intactes du Gabon.
                 </h2>
                 <p className="max-w-xl text-sm text-mist/75">
-                  Documentez la faune, cartographiez les bais, partagez vos découvertes.
-                  Aucun animal n&apos;est blessé : ici, on observe.
+                  Suivez la faune dans la futaie, épaules une arme, abattez, dépecez.
+                  La viande se rapporte au camp ; le carnet garde la trace du reste.
                 </p>
 
                 <div className="flex flex-wrap gap-2">

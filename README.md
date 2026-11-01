@@ -31,6 +31,9 @@ sauvegardes, salons et paiements fonctionnent en mémoire (perdus au redémarrag
 | `npm run assets` | Régénère `public/` (icônes, visuels, textures, GLB, WAV) |
 | `npm run package` | Fabrique `public/downloads/minkebe-server-<version>.zip` |
 | `npm run check:forest` | Mesure la densité de la forêt (ciel visible, placement) |
+| `npm run check:hunt` | Vérifie les cours d'eau, la balistique et la faune |
+| `npm run preview:water` | Rend les cours d'eau hors navigateur (`preview/eau-*.png`) |
+| `npm run preview:faune` | Planche de proportions de la faune (`preview/faune.png`) |
 | `npm run db:push` | Applique le schéma Drizzle à PostgreSQL |
 
 ---
@@ -152,6 +155,9 @@ La forêt est générée par des modules purs, testables sans navigateur :
 |---|---|
 | `src/game/terrain.ts` | Relief, cuvettes des plans d'eau, pentes, distance aux rives |
 | `src/game/forest.ts` | Placement des trois strates (canopée, sous-bois, sol) et forme des houppiers |
+| `src/game/water.ts` | Ligne d'eau (polyligne), lit, rives, nage, maillage des surfaces |
+| `src/game/animals.ts` | Morphologie, déplacement, fuite, dégâts, dépeçage |
+| `src/game/hunting.ts` | Armes, balistique, munitions, viande |
 
 Principes de rendu :
 
@@ -197,6 +203,66 @@ quatre PNG depuis un raycaster logiciel qui partage `buildTile`, `plantCards`
 et `crownCards` avec le jeu. Il ne remplace pas le rendu WebGL (pas de PBR,
 ni d'ombres portées, ni de bloom) : il sert à contrôler la structure et la
 densité, pas la lumière.
+
+## Cours d'eau
+
+Les plans d'eau ne sont plus des rectangles posés sur le relief. Chacun est
+décrit par sa **ligne d'eau** — une polyligne pour la rivière et le ruisseau,
+un point pour le baï et le marais — et une seule fonction de distance signée
+(`waterField`) sert partout :
+
+- le relief creuse le lit et remonte la berge sur six mètres (`terrain.ts`) ;
+- la végétation s'arrête au bord, et une **roselière** pousse dans les
+  quatre derniers mètres (`forest.ts`) ;
+- la surface est extrudée le long de la même ligne : les berges du maillage
+  sont exactement les berges du terrain ;
+- la nage, les crocodiles et la carte GPS lisent la même fonction.
+
+Le shading est un shader dédié (`components/WaterSurface.ts`) :
+
+- trois couches de rides qui dérivent **le long du courant** (la direction est
+  portée par le maillage, donc les rides suivent les boucles de la rivière) ;
+- absorption de Beer-Lambert : vase au bord, tanin presque noir au fond ;
+- Fresnel et reflet de l'environnement **modulé par le feuillage** — l'eau
+  reflète le couvert, pas un ciel vide ;
+- pétillement solaire bruité (deux lobes, sans quoi un seul donne une tache
+  lisse), écume de berge sur cinquante centimètres, brouillard exponentiel.
+
+Contrôle hors navigateur : `npm run preview:water` rejoue la même formule en
+JavaScript sur le même champ de distance. Ce n'est pas une capture du jeu —
+pas de reflets d'arbres réels, pas de bloom — c'est un contrôle de forme et de
+couleur.
+
+## Faune et chasse
+
+Dix espèces sont modélisées : éléphant de forêt, gorille, chimpanzé, panthère,
+bongo, sitatunga, céphalophe bleu, crocodile nain, calao et perroquet jaco.
+Chaque espèce porte sa morphologie dans `game/animals.ts` (garrot, longueur,
+cornes, robe) ; le modèle 3D et la boîte de collision lisent **les mêmes
+nombres**, donc on ne touche jamais un animal qu'on ne voit pas.
+
+Comportement : la harde apparaît entre 24 et 46 unités (derrière la brume),
+paît, erre, fuit quand le joueur fait du bruit, charge pour les espèces
+agressives, et disparaît au-delà de 90 unités.
+
+Cinq armes, tenues en main avec deux avant-bras :
+
+| Arme | Dégâts | Portée | Particularité |
+|---|---|---|---|
+| Couteau de camp | 55 | 1,9 | Silencieux, il faut arriver au contact |
+| Machette | 80 | 2,2 | Lourde, lente |
+| Lance de chasse | 70 | 3,1 | Plus longue, plus lente |
+| Pistolet 9 mm | 58 | 55 | 12 coups, rechargement rapide |
+| Carabine M16 | 96 | 150 | Rafale, 30 coups, bruit énorme |
+
+Un tir à la tête multiplie les dégâts par 1,6 à 2,4 selon l'arme ; la distance
+réduit les dégâts de 30 % au maximum. Une bête abattue laisse une carcasse :
+approchez-vous et dépecez-la (`E`) pour rapporter la viande — 13 kg pour un
+céphalophe, 420 kg pour un éléphant. L'arsenal, les munitions, la viande et le
+tableau de chasse sont sauvegardés avec l'expédition.
+
+Contrôle : `npm run check:hunt` (balistique, munitions, dépeçage, géométrie
+des rives, comportement de la harde).
 
 ## Assets
 

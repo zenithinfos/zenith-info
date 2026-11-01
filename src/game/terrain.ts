@@ -3,16 +3,20 @@
  *
  * Le même calcul sert à déformer le sol, à poser la végétation, à placer la
  * caméra et, côté moteur, à savoir si le joueur a de l'eau à la taille.
+ *
+ * Les plans d'eau ne sont plus des rectangles : le lit est creusé à partir de
+ * la distance signée à la ligne d'eau (voir water.ts). La berge remonte
+ * progressivement sur cinq mètres, ce qui donne des rives en pente douce —
+ * on peut entrer dans l'eau, et surtout on ne voit plus un plan d'eau découpé
+ * au couteau dans la forêt.
  */
 
-import { WATER_BODIES } from "./water";
+import { smoothstep, waterField } from "./water";
 
 export const WORLD_LIMIT = 260;
 
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
+/** Largeur de la frange où le relief est encore influencé par la berge. */
+const BANK_WIDTH = 6.5;
 
 /** Collines de fond, sans les cuvettes. */
 function baseHeight(x: number, z: number): number {
@@ -24,30 +28,18 @@ function baseHeight(x: number, z: number): number {
   );
 }
 
-/** Cuvette d'un plan d'eau : 0 au centre, 1 sur la rive. */
-function waterInfluence(x: number, z: number): { body: (typeof WATER_BODIES)[number]; d: number } | null {
-  let best: { body: (typeof WATER_BODIES)[number]; d: number } | null = null;
-  for (const body of WATER_BODIES) {
-    const nx = Math.abs(x - body.center[0]) / (body.width / 2);
-    const nz = Math.abs(z - body.center[1]) / (body.depth / 2);
-    const d = Math.max(nx, nz);
-    if (d > 1.4) continue;
-    if (!best || d < best.d) best = { body, d };
-  }
-  return best;
-}
-
 /** Hauteur du sol en (x, z). */
 export function terrainHeight(x: number, z: number): number {
   const height = baseHeight(x, z);
-  const influence = waterInfluence(x, z);
-  if (!influence) return height;
+  const field = waterField(x, z);
+  if (!field || field.edge > BANK_WIDTH) return height;
 
-  const { body, d } = influence;
-  const shore = 1 - smoothstep(1.0, 1.4, d);
-  // Le lit descend jusqu'à ~2 m sous la surface au centre.
-  const bed = body.level - 2.1 * (1 - Math.min(1, d));
-  return height * (1 - shore) + bed * shore;
+  // Dans l'eau : le lit. Sur la berge : un bourrelet de vase à la ligne d'eau,
+  // puis remontée vers le relief général.
+  const target = field.edge < 0 ? field.body.level - field.depth : field.body.level + 0.12;
+  const weight =
+    field.edge < 0 ? 1 : 1 - smoothstep(0.1, BANK_WIDTH, field.edge);
+  return target * weight + height * (1 - weight);
 }
 
 /** Pente locale (0 = plat), utile pour éviter de poser des objets à pic. */
@@ -59,16 +51,12 @@ export function slopeAt(x: number, z: number, step = 1.5): number {
 
 /** Un point est-il sous l'eau (lit immergé) ? */
 export function isSubmerged(x: number, z: number): boolean {
-  const influence = waterInfluence(x, z);
-  if (!influence || influence.d > 1) return false;
-  return terrainHeight(x, z) < influence.body.level;
+  const field = waterField(x, z);
+  if (!field || field.edge > 0) return false;
+  return terrainHeight(x, z) < field.body.level;
 }
 
 /** Distance minimale aux rives : négative dans l'eau. */
 export function shoreDistance(x: number, z: number): number {
-  const influence = waterInfluence(x, z);
-  if (!influence) return 999;
-  const { body, d } = influence;
-  const halfExtent = Math.min(body.width, body.depth) / 2;
-  return (d - 1) * halfExtent;
+  return waterField(x, z)?.edge ?? 999;
 }

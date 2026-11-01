@@ -23,6 +23,7 @@ import {
   tickVitals,
   worldClock,
 } from "./realism";
+import { initialArsenalState, type ArsenalState } from "./hunting";
 import { swimState } from "./water";
 
 export interface PlayerState {
@@ -31,6 +32,20 @@ export interface PlayerState {
   motion: "idle" | "walk" | "run" | "sneak" | "swim";
   characterId: string;
   outfit: string;
+}
+
+/**
+ * Chasse : arsenal, viande au sac et tableau de chasse. Sérialisé avec la
+ * sauvegarde — perdre son fusil en rechargeant la page serait absurde.
+ */
+export interface HuntState {
+  arsenal: ArsenalState;
+  /** Viande rapportée au camp, en kg. */
+  meat: number;
+  /** Bêtes abattues, par espèce. */
+  kills: Record<string, number>;
+  /** Coups tirés (statistique de piste). */
+  shots: number;
 }
 
 export interface GameState {
@@ -47,6 +62,7 @@ export interface GameState {
   level: number;
   score: number;
   settings: RealismSettings;
+  hunt: HuntState;
 }
 
 export interface InputState {
@@ -60,7 +76,11 @@ export interface InputState {
   joystick?: { x: number; y: number } | null;
 }
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
+
+export function initialHunt(): HuntState {
+  return { arsenal: initialArsenalState(), meat: 0, kills: {}, shots: 0 };
+}
 
 export function newGame(characterId = "michelle"): GameState {
   const character = getCharacter(characterId as Character["id"]);
@@ -84,6 +104,7 @@ export function newGame(characterId = "michelle"): GameState {
     level: 1,
     score: 0,
     settings: DEFAULT_REALISM,
+    hunt: initialHunt(),
   };
 }
 
@@ -240,6 +261,12 @@ export function serialize(state: GameState): Record<string, unknown> {
     observedSpecies: state.observedSpecies,
     level: state.level,
     score: state.score,
+    hunt: {
+      arsenal: state.hunt.arsenal,
+      meat: Math.round(state.hunt.meat),
+      kills: state.hunt.kills,
+      shots: state.hunt.shots,
+    },
   };
 }
 
@@ -276,6 +303,36 @@ export function deserialize(raw: Record<string, unknown>): GameState {
     level: typeof raw.level === "number" ? raw.level : 1,
     score: typeof raw.score === "number" ? raw.score : 0,
     gadgets: initialGadgets(Array.isArray(raw.visitedZones) ? (raw.visitedZones as string[]) : []),
+    hunt: deserializeHunt(raw.hunt),
+  };
+}
+
+/** Relit l'état de chasse d'une sauvegarde, en tolérant les vieilles versions. */
+function deserializeHunt(raw: unknown): HuntState {
+  const base = initialHunt();
+  if (!raw || typeof raw !== "object") return base;
+  const source = raw as Partial<HuntState>;
+  const arsenal = source.arsenal;
+  const weapons =
+    arsenal && Array.isArray(arsenal.weapons) && arsenal.weapons.length
+      ? base.arsenal.weapons.map((weapon) => {
+          const saved = arsenal.weapons.find((entry) => entry.id === weapon.id);
+          if (!saved) return weapon;
+          return {
+            ...weapon,
+            loaded: Number.isFinite(saved.loaded) ? Number(saved.loaded) : weapon.loaded,
+            reserve: Number.isFinite(saved.reserve) ? Number(saved.reserve) : weapon.reserve,
+          };
+        })
+      : base.arsenal.weapons;
+  return {
+    arsenal: {
+      weapons,
+      current: (arsenal?.current as HuntState["arsenal"]["current"]) ?? base.arsenal.current,
+    },
+    meat: typeof source.meat === "number" ? source.meat : 0,
+    kills: source.kills && typeof source.kills === "object" ? source.kills : {},
+    shots: typeof source.shots === "number" ? source.shots : 0,
   };
 }
 

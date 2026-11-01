@@ -55,16 +55,23 @@ export default function GpsMap({
     [discovered],
   );
 
+  // Les plans d'eau sont tracés depuis leur ligne d'eau : une rivière qui
+  // serpente doit serpenter aussi sur la carte.
   const waters = useMemo(
     () =>
       WATER_BODIES.map((body) => {
-        const centre = project(body.center[0], body.center[1]);
+        const points = body.path.map(([x, z]) => project(x, z));
+        const width = (body.halfWidth * 2 * 100) / (VIEW * 2);
+        const d = points
+          .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+          .join(" ");
         return {
           body,
-          x: centre.x - (body.width / (VIEW * 2)) * 100 * 0.5,
-          y: centre.y - (body.depth / (VIEW * 2)) * 100 * 0.5,
-          w: (body.width / (VIEW * 2)) * 100,
-          h: (body.depth / (VIEW * 2)) * 100,
+          d,
+          width,
+          pond: body.path.length < 2,
+          centre: points[0],
+          radius: (body.halfWidth * 100) / (VIEW * 2),
         };
       }),
     [],
@@ -117,20 +124,31 @@ export default function GpsMap({
           <rect width="100" height="100" fill="#08170f" />
           <rect width="100" height="100" fill="url(#grid)" />
 
-          {waters.map(({ body, x, y, w, h }) => (
-            <rect
-              key={body.id}
-              x={x}
-              y={y}
-              width={w}
-              height={h}
-              rx={2}
-              fill="#12333a"
-              stroke="#1e5a63"
-              strokeWidth="0.3"
-              opacity={0.85}
-            />
-          ))}
+          {waters.map(({ body, d, width, pond, centre, radius }) =>
+            pond ? (
+              <circle
+                key={body.id}
+                cx={centre.x}
+                cy={centre.y}
+                r={radius}
+                fill="#12333a"
+                stroke="#1e5a63"
+                strokeWidth="0.3"
+                opacity={0.85}
+              />
+            ) : (
+              <path
+                key={body.id}
+                d={d}
+                fill="none"
+                stroke="#12333a"
+                strokeWidth={Math.max(1.2, width)}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity={0.9}
+              />
+            ),
+          )}
 
           {zones.map(({ zone, centre, radius, known }) => (
             <g key={zone.id} opacity={known ? 1 : 0.32}>

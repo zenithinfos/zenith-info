@@ -29,6 +29,16 @@ import {
   type TileOptions,
 } from "@/game/forest";
 import { terrainHeight } from "@/game/terrain";
+import { type Animal } from "@/game/animals";
+import { type WeaponId } from "@/game/hunting";
+import {
+  createWaterSurface,
+  setWaterCanopy,
+  setWaterNormal,
+  type WaterSurface,
+} from "./WaterSurface";
+import { createViewModel, type ViewModel } from "./WeaponView";
+import { createAnimalRig, disposeAnimalRig, poseAnimal, type AnimalRig } from "./AnimalModel";
 
 /**
  * Scène 3D de la réserve.
@@ -64,6 +74,16 @@ export interface SceneController {
   setPaused: (paused: boolean) => void;
   getYaw: () => number;
   requestLook: () => void;
+  /** Instantané de la faune : le rendu se contente de le dessiner. */
+  setAnimals: (animals: Animal[]) => void;
+  /** Arme tenue en main. */
+  setWeapon: (id: WeaponId) => void;
+  /** Visée (arme épaulée). */
+  setAiming: (aiming: boolean) => void;
+  /** Retour visuel d'un tir : recul, éclair de bouche, coup de lame. */
+  fireFeedback: (id: WeaponId) => void;
+  /** Rayon de visée depuis l'œil, en coordonnées monde. */
+  getAim: () => { origin: [number, number, number]; direction: [number, number, number] };
   /** Nombre d'arbres effectivement générés (diagnostic / HUD). */
   getStats: () => { trees: number; understory: number; logs: number };
   dispose: () => void;
@@ -325,13 +345,15 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const pmrem = new THREE.PMREMGenerator(renderer);
       const envMap = pmrem.fromEquirectangular(equirect).texture;
       pmrem.dispose();
-      equirect.dispose();
-      return envMap;
+      // L'équirectangulaire est conservée : l'eau l'échantillonne directement
+      // pour ses reflets, sans passer par la carte préfiltrée.
+      return { envMap, equirect };
     })();
     if (environment) {
-      scene.environment = environment;
+      scene.environment = environment.envMap;
       scene.environmentIntensity = 0.45;
     }
+    const environmentEquirect = environment?.equirect ?? null;
 
     const moon = new THREE.DirectionalLight(SCENE_CONFIG.lighting.moon.color, 0);
     moon.position.set(-50, 80, -30);
@@ -1128,29 +1150,81 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // ------------------------------------------------------------------
     // Eau
     // ------------------------------------------------------------------
-    const waterMeshes: { mesh: THREE.Mesh; body: (typeof WATER_BODIES)[number] }[] = [];
+    // Chaque plan d'eau est une surface dédiée, extrudée le long de sa ligne
+    // d'eau : rivière sinueuse, ruisseau, baï et marais ont chacun leur lit.
+    const waterSurfaces: WaterSurface[] = [];
     for (const body of WATER_BODIES) {
-      const geometry = new THREE.PlaneGeometry(body.width, body.depth, 20, 20);
-      geometry.rotateX(-Math.PI / 2);
-      const material = new THREE.MeshStandardMaterial({
-        color: body.color,
-        transparent: true,
-        opacity: body.opacity,
-        roughness: 0.12,
-        metalness: 0.4,
-      });
-      loadTexture(TEXTURES.waterNormal, (texture) => {
-        texture.repeat.set(body.width / 8, body.depth / 8);
-        material.normalMap = texture;
-        material.normalScale.set(0.5, 0.5);
-        material.needsUpdate = true;
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(body.center[0], body.level, body.center[1]);
-      mesh.receiveShadow = true;
-      scene.add(mesh);
-      waterMeshes.push({ mesh, body });
+      const surface = createWaterSurface(body);
+      surface.mesh.name = `eau-${body.id}`;
+      scene.add(surface.mesh);
+      waterSurfaces.push(surface);
     }
+    // Une seule carte de normales partagée : les trois couches de rides du
+    // shader la réutilisent à des échelles différentes.
+    loadTexture(
+      TEXTURES.waterNormal,
+      (texture) => {
+        for (const surface of waterSurfaces) setWaterNormal(surface, texture);
+      },
+      undefined,
+      true,
+    );
+    // Le feuillage qui sert de masque de reflet : c'est lui qui donne à l'eau
+    // son aspect de sous-bois et non de ciel.
+    loadTexture(TEXTURES.foliage, (texture) => {
+      for (const surface of waterSurfaces) setWaterCanopy(surface, texture);
+    });
+    if (environmentEquirect) {
+      for (const surface of waterSurfaces) {
+        const material = surface.mesh.material as THREE.ShaderMaterial;
+        const previous = material.uniforms.uEnv.value as THREE.Texture | null;
+        material.uniforms.uEnv.value = environmentEquirect;
+        if (previous instanceof THREE.DataTexture) previous.dispose();
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Faune
+    // ------------------------------------------------------------------
+    const animalGroup = new THREE.Group();
+    animalGroup.name = "faune";
+    scene.add(animalGroup);
+
+    const syncAnimals = (animals: Animal[]) => {
+      animalSnapshot = animals;
+      const seen = new Set<number>();
+      for (const animal of animals) {
+        seen.add(animal.id);
+        if (animalRigs.has(animal.id)) continue;
+        const rig = createAnimalRig(animal.speciesId);
+        if (!rig) continue;
+        // Seuls le tronc et la tête projettent une ombre : 4 pattes par animal
+        // multiplieraient par cinq le coût de la carte d'ombres.
+        rig.root.children.forEach((child, index) => {
+          if (index > 2 || !(child instanceof THREE.Mesh)) return;
+          child.castShadow = true;
+          child.receiveShadow = true;
+        });
+        rig.head.children.forEach((child) => {
+          if (child instanceof THREE.Mesh) child.castShadow = true;
+        });
+        animalRigs.set(animal.id, rig);
+        animalGroup.add(rig.group);
+      }
+      for (const [id, rig] of animalRigs) {
+        if (seen.has(id)) continue;
+        disposeAnimalRig(rig);
+        animalRigs.delete(id);
+      }
+    };
+
+    // ------------------------------------------------------------------
+    // Arme en main
+    // ------------------------------------------------------------------
+    const viewModel: ViewModel = createViewModel();
+    camera.add(viewModel.group);
+    // La caméra doit appartenir à la scène pour que ses enfants soient rendus.
+    scene.add(camera);
 
     // ------------------------------------------------------------------
     // Pluie et lucioles
@@ -1301,6 +1375,12 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // ------------------------------------------------------------------
     // Redimensionnement
     // ------------------------------------------------------------------
+    // Déclarés avant `resize` : la fonction y accède dès le premier appel, et
+    // une `let` en zone morte temporelle ferait planter tout le montage.
+    let composer: EffectComposer | null = null;
+    let gradePass: ShaderPass | null = null;
+    let bloomPass: UnrealBloomPass | null = null;
+
     const resize = () => {
       const width = mount.clientWidth || 1;
       const height = mount.clientHeight || 1;
@@ -1320,9 +1400,6 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // halo sur les trouées de lumière, pas de grain. C'est ce qui sépare un
     // rendu de jeu d'une photographie de forêt.
     const useComposer = !isMobile && !reduced;
-    let composer: EffectComposer | null = null;
-    let gradePass: ShaderPass | null = null;
-    let bloomPass: UnrealBloomPass | null = null;
 
     if (useComposer) {
       const target = new THREE.WebGLRenderTarget(1, 1, {
@@ -1407,6 +1484,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     let bob = 0;
     let currentMotion = "idle";
     let daylight = 1;
+    let aiming = false;
+    /** Dernier instantané de faune reçu du moteur de jeu. */
+    let animalSnapshot: Animal[] = [];
+    const animalRigs = new Map<number, AnimalRig>();
 
     const animate = () => {
       raf = requestAnimationFrame(animate);
@@ -1445,18 +1526,52 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       camera.rotation.x = pitch;
       camera.rotation.z = Math.sin(bob * 0.5) * 0.004;
 
-      // Vagues.
-      for (const { mesh } of waterMeshes) {
-        const positions = mesh.geometry.attributes.position as THREE.BufferAttribute;
-        for (let i = 0; i < positions.count; i++) {
-          const x = positions.getX(i);
-          const z = positions.getZ(i);
-          positions.setY(
-            i,
-            Math.sin(x * 0.22 + elapsed * 1.1) * 0.05 + Math.cos(z * 0.3 - elapsed * 0.9) * 0.04,
+      // Eau : le clapot est calculé dans le vertex shader, on ne pousse que les
+      // uniformes (soleil, brouillard, reflet du couvert).
+      {
+        const fog = scene.fog as THREE.FogExp2;
+        const night = daylight < 0.3;
+        for (const surface of waterSurfaces) {
+          surface.uniforms.uTime.value = elapsed;
+          surface.uniforms.uSunDir.value
+            .set(SUN_OFFSET.x, SUN_OFFSET.y, SUN_OFFSET.z)
+            .normalize();
+          surface.uniforms.uSunIntensity.value = 0.12 + daylight * 0.95;
+          surface.uniforms.uSunColor.value.copy(sun.color);
+          surface.uniforms.uFogColor.value.copy(fog.color);
+          surface.uniforms.uFogDensity.value = fog.density;
+          // Reflet du couvert : sombre sous les feuilles, jamais le ciel nu.
+          const canopy = (surface.mesh.material as THREE.ShaderMaterial).uniforms.uCanopy
+            .value as THREE.Color;
+          canopy.setRGB(
+            (night ? 0.03 : 0.09) + daylight * 0.05,
+            (night ? 0.045 : 0.15) + daylight * 0.07,
+            (night ? 0.04 : 0.11) + daylight * 0.05,
           );
         }
-        positions.needsUpdate = true;
+      }
+
+      // Faune : on repose chaque individu à partir de l'instantané du moteur.
+      for (const animal of animalSnapshot) {
+        const rig = animalRigs.get(animal.id);
+        if (!rig) continue;
+        const distance = Math.hypot(animal.x - camera.position.x, animal.z - camera.position.z);
+        if (distance > 88) {
+          rig.group.visible = false;
+          continue;
+        }
+        rig.group.visible = true;
+        poseAnimal(rig, animal, distance);
+      }
+
+      // Arme en main : recul, oscillation de marche, visée.
+      viewModel.update(dt, moving, aiming);
+
+      // Léger glissement du champ quand on épaule.
+      const targetFov = aiming ? SCENE_CONFIG.camera.fov * 0.78 : SCENE_CONFIG.camera.fov;
+      if (Math.abs(camera.fov - targetFov) > 0.05) {
+        camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 12);
+        camera.updateProjectionMatrix();
       }
 
       // Pluie.
@@ -1571,6 +1686,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         hemisphere.intensity = 0.25 + value * 0.5;
         moon.intensity = (1 - value) * 0.5;
         renderer.toneMappingExposure = 0.82 + value * 0.3;
+        // Lampe frontale : elle n'éclaire vraiment que lorsque la nuit tombe.
+        viewModel.setLamp(0.08 + (1 - value) * 0.85);
 
         rain.visible = wet && intensity > 0.05;
         rainMaterial.opacity = rainParams(intensity).opacity;
@@ -1617,6 +1734,28 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         paused = value;
         if (value && document.pointerLockElement) document.exitPointerLock();
       },
+      setAnimals(animals) {
+        syncAnimals(animals);
+      },
+      setWeapon(id) {
+        viewModel.setWeapon(id);
+      },
+      setAiming(value) {
+        aiming = value;
+        viewModel.setAiming(value);
+      },
+      fireFeedback(id) {
+        if (id === "couteau" || id === "machette" || id === "lance") viewModel.slash();
+        else viewModel.kick(id === "m16" ? 0.8 : 1);
+      },
+      getAim() {
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        return {
+          origin: [camera.position.x, camera.position.y, camera.position.z],
+          direction: [direction.x, direction.y, direction.z],
+        };
+      },
       getYaw() {
         return yaw;
       },
@@ -1652,6 +1791,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
             else material?.dispose();
           }
         });
+        for (const surface of waterSurfaces) surface.dispose();
+        for (const [, rig] of animalRigs) disposeAnimalRig(rig);
+        animalRigs.clear();
+        viewModel.dispose();
         textures.forEach((texture) => texture.dispose());
         shaftTexture.dispose();
         contactTexture.dispose();

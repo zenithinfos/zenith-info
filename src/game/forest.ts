@@ -577,6 +577,27 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
     });
   }
 
+  // --- roselière : touffes hautes au bord de l'eau.
+  // Une rive nue ne ressemble à rien : dans un cours d'eau congolais, la
+  // transition terre/eau est toujours couverte de roseaux, de papyrus et
+  // d'herbes penchées. Elles débordent même dans l'eau peu profonde.
+  const reedAttempts = Math.round(area * 0.7);
+  for (let i = 0; i < reedAttempts; i++) {
+    const x = originX + rand() * TILE_SIZE;
+    const z = originZ + rand() * TILE_SIZE;
+    const shore = shoreDistance(x, z);
+    if (shore < -1.1 || shore > 3.4) continue;
+    if (rand() > 0.55) continue;
+    understory.push({
+      x,
+      z,
+      y: terrainHeight(x, z),
+      scale: 0.9 + rand() * 1.3,
+      rotation: rand() * Math.PI * 2,
+      variant: 4,
+    });
+  }
+
   // --- litière : feuilles mortes posées à plat, ce que la texture de sol ne
   // peut pas donner (relief, accroche de lumière au premier plan).
   const litter: LitterPatch[] = [];
