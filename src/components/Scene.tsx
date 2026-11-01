@@ -510,7 +510,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     };
 
     // Géométries et matériaux partagés par toutes les tuiles.
-    const trunkGeometry = new THREE.CylinderGeometry(0.62, 1, 1, 7, 2, true);
+    // Cylindre effilé, ouvert : le fût s'affine vers le haut et les branches
+    // s'y raccordent sans capuchon visible.
+    const trunkGeometry = new THREE.CylinderGeometry(0.62, 1, 1, 8, 1, true);
     trunkGeometry.translate(0, 0.5, 0);
     const trunkMaterial = new THREE.MeshStandardMaterial({
       color: FOREST_PALETTE.bark,
@@ -533,13 +535,6 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       undefined,
       true,
     );
-
-    const buttressGeometry = new THREE.CylinderGeometry(0.85, 1.35, 1, 7, 1, true);
-    buttressGeometry.translate(0, 0.5, 0);
-
-    // Branche : cylindre unitaire couché le long de +Y, pivot à la base.
-    const branchGeometry = new THREE.CylinderGeometry(0.5, 1, 1, 5, 1, true);
-    branchGeometry.translate(0, 0.5, 0);
 
     const cardGeometry = new THREE.PlaneGeometry(1, 1);
     const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
@@ -688,41 +683,62 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const tile = buildTile(tileX, tileZ, TILE_OPTIONS);
       const tileRand = mulberry32(tileSeed(tileX, tileZ));
 
-      // --- fûts et contreforts
-      if (tile.trees.length > 0) {
-        const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, tile.trees.length);
-        const buttress = new THREE.InstancedMesh(buttressGeometry, trunkMaterial, tile.trees.length);
-        let buttressCount = 0;
+      // --- charpente : fût, contreforts, branches, rameaux
+      // Chaque segment est un cylindre effilé orienté dans l'espace : c'est
+      // cette charpente, et non un mât, qui donne sa silhouette à l'arbre.
+      const segments = tile.trees.flatMap((tree) =>
+        tree.segments.map((segment) => ({ tree, segment })),
+      );
+      if (segments.length > 0) {
+        const mesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, segments.length);
+        const from = new THREE.Vector3();
+        const to = new THREE.Vector3();
+        const axis = new THREE.Vector3();
+        const up = new THREE.Vector3(0, 1, 0);
+        const quaternion = new THREE.Quaternion();
 
-        tile.trees.forEach((tree, index) => {
-          dummy.position.set(tree.x, tree.y - 0.3, tree.z);
-          dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1], "YXZ");
-          dummy.scale.set(tree.trunkRadius, tree.trunkHeight, tree.trunkRadius);
+        segments.forEach(({ tree, segment }, index) => {
+          from.set(tree.x + segment.from[0], tree.y + segment.from[1], tree.z + segment.from[2]);
+          to.set(tree.x + segment.to[0], tree.y + segment.to[1], tree.z + segment.to[2]);
+          axis.subVectors(to, from);
+          const length = axis.length();
+          // Le cylindre unitaire monte le long de +Y : on l'aligne sur le
+          // segment par un quaternion.
+          quaternion.setFromUnitVectors(up, axis.normalize());
+          dummy.position.copy(from);
+          dummy.quaternion.copy(quaternion);
+          // Le rayon moyen entre les deux extrémités approche l'effilement
+          // (un cylindre instancié ne peut pas varier sur sa longueur).
+          dummy.scale.set(
+            (segment.radiusFrom + segment.radiusTo) * 0.5,
+            length,
+            (segment.radiusFrom + segment.radiusTo) * 0.5,
+          );
           dummy.updateMatrix();
-          trunks.setMatrixAt(index, dummy.matrix);
-          tintColor
-            .setHex(0xffffff)
-            .multiplyScalar(tree.kind === "emergent" ? 0.78 : tree.kind === "mid" ? 0.92 : 1);
-          trunks.setColorAt(index, tintColor);
+          mesh.setMatrixAt(index, dummy.matrix);
 
-          if (tree.kind === "emergent" || tree.kind === "mid") {
-            const height = tree.kind === "emergent" ? tree.trunkHeight * 0.3 : tree.trunkHeight * 0.22;
-            dummy.position.set(tree.x, tree.y - 0.35, tree.z);
-            dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1], "YXZ");
-            dummy.scale.set(tree.trunkRadius * 2, height, tree.trunkRadius * 2);
-            dummy.updateMatrix();
-            buttress.setMatrixAt(buttressCount++, dummy.matrix);
-          }
+          // Le bois est plus sombre en bas et sur les rameaux fins.
+          const shade =
+            segment.kind === 0
+              ? tree.kind === "emergent"
+                ? 0.72
+                : tree.kind === "mid"
+                  ? 0.84
+                  : 1
+              : segment.kind === 1
+                ? 0.66
+                : segment.kind === 2
+                  ? 0.9
+                  : 1.05;
+          tintColor.setHex(0xffffff).multiplyScalar(shade);
+          mesh.setColorAt(index, tintColor);
         });
 
-        buttress.count = buttressCount;
-        trunks.instanceMatrix.needsUpdate = true;
-        buttress.instanceMatrix.needsUpdate = true;
-        if (trunks.instanceColor) trunks.instanceColor.needsUpdate = true;
-        trunks.castShadow = true;
-        trunks.receiveShadow = true;
-        buttress.castShadow = true;
-        group.add(trunks, buttress);
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
       }
 
       // --- ombres de contact (troncs et plants)
@@ -750,32 +766,6 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         mesh.count = index;
         mesh.instanceMatrix.needsUpdate = true;
         mesh.frustumCulled = false;
-        group.add(mesh);
-      }
-
-      // --- charpentières
-      const branches = tile.trees.flatMap((tree) => tree.branches ?? []);
-      if (branches.length > 0) {
-        const mesh = new THREE.InstancedMesh(branchGeometry, trunkMaterial, branches.length);
-        const branchSource = tile.trees.filter((tree) => (tree.branches?.length ?? 0) > 0);
-        let index = 0;
-        for (const tree of branchSource) {
-          for (const branch of tree.branches ?? []) {
-            // Le cylindre monte le long de +Y : on le couche vers l'extérieur.
-            dummy.position.set(tree.x, tree.y + branch.y, tree.z);
-            dummy.rotation.set(0, Math.PI / 2 - branch.angle, Math.PI / 2 - branch.rise, "YXZ");
-            dummy.scale.set(branch.radius, branch.length, branch.radius);
-            dummy.updateMatrix();
-            mesh.setMatrixAt(index, dummy.matrix);
-            tintColor.setHex(0xffffff).multiplyScalar(0.82);
-            mesh.setColorAt(index, tintColor);
-            index++;
-          }
-        }
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
         group.add(mesh);
       }
 

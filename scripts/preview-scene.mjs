@@ -209,32 +209,43 @@ function buildScene(game, random, textures) {
 
     for (const tree of tile.trees) {
       trees.push(tree);
-      trunks.push({
-        x: tree.x,
-        z: tree.z,
-        y0: tree.y - 0.4,
-        y1: tree.y + tree.trunkHeight,
-        r: tree.trunkRadius,
-        shade:
-          tree.kind === "emergent" ? 0.55 : tree.kind === "mid" ? 0.68 : tree.kind === "understory" ? 0.8 : 0.72,
-      });
-
-      // Charpentières : segments obliques, dessinés comme des troncs couchés.
-      for (const branch of tree.branches ?? []) {
-        const dx = Math.cos(branch.angle) * branch.length * Math.cos(branch.rise);
-        const dz = Math.sin(branch.angle) * branch.length * Math.cos(branch.rise);
-        const dy = Math.sin(branch.rise) * branch.length;
-        trunks.push({
-          x: tree.x,
-          z: tree.z,
-          y0: tree.y + branch.y,
-          y1: tree.y + branch.y + dy,
-          r: branch.radius,
-          shade: 0.7,
-          horizontal: true,
-          x2: tree.x + dx,
-          z2: tree.z + dz,
-        });
+      // Charpente complète : chaque segment (fût, contrefort, branche, rameau)
+      // devient un cylindre du raycaster. C'est la même donnée que le jeu.
+      for (const segment of tree.segments ?? []) {
+        const from = segment.from;
+        const to = segment.to;
+        const vertical =
+          Math.abs(to[0] - from[0]) < 0.02 && Math.abs(to[2] - from[2]) < 0.02;
+        const radius = (segment.radiusFrom + segment.radiusTo) * 0.5;
+        if (vertical) {
+          trunks.push({
+            x: tree.x + from[0],
+            z: tree.z + from[2],
+            y0: tree.y + from[1],
+            y1: tree.y + to[1],
+            r: radius,
+            shade:
+              segment.kind === 0
+                ? tree.kind === "emergent"
+                  ? 0.55
+                  : tree.kind === "mid"
+                    ? 0.68
+                    : 0.8
+                : 0.62,
+          });
+        } else {
+          trunks.push({
+            x: tree.x + from[0],
+            z: tree.z + from[2],
+            y0: tree.y + from[1],
+            y1: tree.y + to[1],
+            r: radius,
+            shade: segment.kind === 1 ? 0.5 : 0.68,
+            horizontal: true,
+            x2: tree.x + to[0],
+            z2: tree.z + to[2],
+          });
+        }
       }
 
       for (const card of game.crownCards(tree, tileRandom)) {
@@ -476,8 +487,6 @@ function render(scene, game, camera, textures) {
   const { quads, trunks, grid, cell } = scene;
   const fov = (62 * Math.PI) / 180;
   const aspect = WIDTH / HEIGHT;
-  // Angle couvert par un pixel : sert au choix du niveau de détail.
-  const PIXEL_ANGLE = (2 * Math.tan(fov / 2)) / HEIGHT;
   const tanHalf = Math.tan(fov / 2);
 
   // Repère caméra : direction = (sin yaw, 0, cos yaw) à l'horizontale.
@@ -593,13 +602,8 @@ function render(scene, game, camera, textures) {
               const v = (pxw * quad.vAxis[0] + pyw * quad.vAxis[1] + pzw * quad.vAxis[2]) / (2 * quad.hh) + 0.5;
               if (u < 0 || u > 1 || v < 0 || v > 1) continue;
 
-              // Empreinte d'un texel à l'écran : si elle dépasse le pixel,
-              // on mélange vers la couleur moyenne (anti-crénelage).
-              const texelsPerPixel =
-                ((bestT * PIXEL_ANGLE) / Math.max(0.001, quad.hw * 2)) * quad.tex.width;
-              const lod = Math.max(0, Math.min(1, (texelsPerPixel - 1.2) / 2.5));
-              const texel = sampleTexture(quad.tex, u, v, lod);
-              if (texel.rgba[3] < 0.42) continue;
+              const texel = sampleTexture(quad.tex, u, v, 0);
+              if (texel.rgba[3] < 0.5) continue;
 
               bestT = tq;
               hit = { kind: "card", quad, texel, normal: quad.normal, u, v, t: tq };
@@ -631,7 +635,10 @@ function render(scene, game, camera, textures) {
         // sans quoi une bande de ciel nue apparaît entre les troncs.
         const sky = Math.max(0, dir[1]);
         const haze = Math.pow(1 - Math.min(1, sky / 0.55), 1.6);
-        const blue = [0.52 + sky * 0.32, 0.68 + sky * 0.26, 0.78 + sky * 0.18];
+        // Ciel sous couvert : lumineux au zénith seulement, vert profond
+        // dès qu'on s'approche de l'horizon — on ne voit jamais l'horizon
+        // dégagé depuis le sol d'une forêt fermée.
+        const blue = [0.18 + sky * 0.62, 0.26 + sky * 0.62, 0.2 + sky * 0.6];
         r = blue[0] + (fogColor[0] * 1.0 - blue[0]) * haze;
         g = blue[1] + (fogColor[1] * 0.98 - blue[1]) * haze;
         b = blue[2] + (fogColor[2] * 0.95 - blue[2]) * haze;

@@ -15,6 +15,7 @@
  */
 
 import { ZONES } from "./levels";
+import { buildSkeleton, type Cluster, type Segment, type TreeShape } from "./tree";
 import { terrainHeight, slopeAt, shoreDistance, WORLD_LIMIT } from "./terrain";
 
 /**
@@ -40,21 +41,15 @@ export interface Tree {
   tint: number;
   /** Légère inclinaison (arbres penchés vers la lumière). */
   lean: [number, number];
-  /** Charpentières : sans elles, le houppier flotte au-dessus d'un mât nu. */
-  branches?: Branch[];
-}
-
-export interface Branch {
-  /** Hauteur d'insertion sur le fût, en unités. */
-  y: number;
-  /** Azimut, en radians. */
-  angle: number;
-  /** Longueur de la branche. */
-  length: number;
-  /** Inclinaison vers le haut (0 = horizontale). */
-  rise: number;
-  /** Rayon à la base. */
-  radius: number;
+  /**
+   * Charpente complète : fût courbé, contreforts, branches et ramifications.
+   * Sans elle, l'arbre n'est qu'un mât surmonté d'une boule.
+   */
+  segments: Segment[];
+  /** Grappes de feuillage accrochées aux extrémités des rameaux. */
+  clusters: Cluster[];
+  /** Hauteur à laquelle commence le houppier (diagnostic). */
+  crownBase: number;
 }
 
 export interface UnderstoryPlant {
@@ -218,106 +213,45 @@ export interface CrownCard {
   sparse?: boolean;
 }
 
+/**
+ * Cartes de feuillage d'un arbre, réparties **dans les grappes** de sa
+ * charpente. Chaque grappe reçoit plusieurs petites cartes orientées dans
+ * toutes les directions : c'est ce qui donne une masse feuillue en volume
+ * plutôt qu'un disque posé sur un mât.
+ */
 export function crownCards(tree: Tree, random: () => number): CrownCard[] {
-  const { crownScale, trunkHeight, kind, rotation } = tree;
   const cards: CrownCard[] = [];
+  const clusters = tree.clusters ?? [];
 
-  if (kind === "sapling") {
-    // Arbuste de sous-bois : houppier large et bas, du sol jusqu'à la cime.
-    // C'est cette strate qui masque l'horizon à hauteur d'homme.
-    const height = trunkHeight + crownScale * 0.6;
-    for (let i = 0; i < 3; i++) {
-      const a = rotation + i * 2.09;
+  for (const cluster of clusters) {
+    // Densité selon la taille de la grappe : une grosse grappe porte plus de
+    // cartes, mais toujours de petites cartes — jamais un grand panneau.
+    // Deux à quatre cartes par grappe : la masse vient du nombre de grappes,
+    // pas de la taille des cartes. Au-delà, le coût explose sans gagner.
+    const count = Math.max(3, Math.min(5, Math.round(cluster.radius * 1.1)));
+    for (let i = 0; i < count; i++) {
+      // Point dans la sphère, biaisé vers la surface : le cœur reste touffu
+      // sans être un bloc plein.
+      const theta = random() * Math.PI * 2;
+      const phi = Math.acos(2 * random() - 1);
+      const r = cluster.radius * Math.cbrt(random()) * 0.95;
+      const ox = Math.sin(phi) * Math.cos(theta) * r;
+      const oy = Math.cos(phi) * r * 0.75;
+      const oz = Math.sin(phi) * Math.sin(theta) * r;
+
+      // Taille de carte : un tiers de la grappe environ.
+      const size = cluster.radius * (0.55 + random() * 0.35);
       cards.push({
-        offset: [
-          Math.cos(a) * crownScale * 0.18,
-          height * (0.4 + i * 0.2),
-          Math.sin(a) * crownScale * 0.18,
-        ],
-        width: crownScale * 2.1,
-        height: crownScale * 1.7,
-        horizontal: false,
-        angle: a,
-        tilt: 0.26,
+        offset: [cluster.at[0] + ox, cluster.at[1] + oy, cluster.at[2] + oz],
+        width: size * (1.1 + random() * 0.4),
+        height: size * (0.95 + random() * 0.3),
+        // Une carte sur trois est couchée : le dessus du houppier doit être
+        // couvert, sinon la vue plongeante traverse la couronne.
+        horizontal: random() < 0.34,
+        angle: random() * Math.PI * 2,
+        tilt: 0.9,
       });
     }
-    cards.push({
-      offset: [0, height * 0.9, 0],
-      width: crownScale * 2.6,
-      height: crownScale * 2.6,
-      horizontal: true,
-      angle: rotation + random() * Math.PI,
-      tilt: 0.24,
-    });
-    return cards;
-  }
-
-  if (kind === "understory") {
-    // Jeunes arbres : houppier bas mais étalé, en quatre bouquets.
-    const base = trunkHeight * 0.68;
-    for (let i = 0; i < 4; i++) {
-      const a = rotation + (i * Math.PI) / 2 + random() * 0.5;
-      const r = crownScale * (0.18 + random() * 0.3);
-      cards.push({
-        offset: [Math.cos(a) * r, base + crownScale * (0.2 + random() * 0.9), Math.sin(a) * r],
-        width: crownScale * (1.7 + random() * 0.7),
-        height: crownScale * (1.4 + random() * 0.6),
-        horizontal: false,
-        angle: a,
-        tilt: 0.3,
-      });
-    }
-    cards.push({
-      offset: [0, trunkHeight + crownScale * 0.45, 0],
-      width: crownScale * 2.7,
-      height: crownScale * 2.7,
-      horizontal: true,
-      angle: rotation + random() * Math.PI,
-      tilt: 0.14,
-    });
-    return cards;
-  }
-
-  // --- arbres de canopée : nuage de bouquets dans un ellipsoïde
-  // Peu de grandes cartes donnent des « autocollants » ; beaucoup de petites
-  // cartes réparties en volume se lisent comme une masse de feuilles.
-  const clumps = kind === "emergent" ? 11 : 9;
-  const crownBase = trunkHeight * 0.55;
-  const crownHeight = trunkHeight * 0.55 + crownScale * 0.55;
-  const spread = crownScale * 0.62;
-
-  for (let i = 0; i < clumps; i++) {
-    const a = rotation + i * 2.39996 + random() * 0.7; // angle d'or : pas d'alignement
-    // Répartition en anneaux : les bouquets du centre sont plus haut.
-    const radius = spread * Math.sqrt(random()) * (0.35 + 0.65 * (i / clumps));
-    const y = crownBase + crownHeight * (0.12 + 0.88 * Math.pow(random(), 0.75));
-    const size = crownScale * (0.85 + random() * 0.75);
-    cards.push({
-      offset: [Math.cos(a) * radius, y, Math.sin(a) * radius],
-      width: size * 1.55,
-      height: size * 1.15,
-      horizontal: false,
-      angle: a + (random() - 0.5) * 0.8,
-      tilt: 0.42,
-      // Les bouquets extérieurs sont épars : le ciel passe entre les feuilles.
-      sparse: false,
-    });
-  }
-
-  // Toit : deux nappes couchées au sommet, elles bouchent la vue du ciel.
-  for (let i = 0; i < (kind === "emergent" ? 2 : 1); i++) {
-    cards.push({
-      offset: [
-        (random() - 0.5) * spread * 0.6,
-        trunkHeight + crownScale * (0.35 + random() * 0.3),
-        (random() - 0.5) * spread * 0.6,
-      ],
-      width: crownScale * (2.2 + random() * 0.6),
-      height: crownScale * (2.2 + random() * 0.6),
-      horizontal: true,
-      angle: rotation + random() * Math.PI,
-      tilt: 0.12,
-    });
   }
 
   return cards;
@@ -565,30 +499,14 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
             ? 2.6 + rand() * 1.6
             : 0.85 + rand() * 0.75;
 
-    // Charpentières : deux à quatre, insérées dans la moitié haute du fût.
-    const branches: Branch[] = [];
-    if (kind === "emergent" || kind === "mid") {
-      const count = kind === "emergent" ? 4 : 3;
-      for (let b = 0; b < count; b++) {
-        branches.push({
-          y: trunkHeight * (0.55 + (b / count) * 0.4) + rand() * 1.5,
-          angle: rand() * Math.PI * 2,
-          length: crownScale * (0.6 + rand() * 0.55),
-          rise: 0.25 + rand() * 0.5,
-          radius: trunkRadius * (0.28 + rand() * 0.26),
-        });
-      }
-    } else if (kind === "understory") {
-      for (let b = 0; b < 2; b++) {
-        branches.push({
-          y: trunkHeight * (0.5 + b * 0.25) + rand(),
-          angle: rand() * Math.PI * 2,
-          length: crownScale * (0.7 + rand() * 0.5),
-          rise: 0.3 + rand() * 0.5,
-          radius: trunkRadius * (0.35 + rand() * 0.2),
-        });
-      }
-    }
+    // Charpente complète : fût, contreforts, branches, grappes de feuillage.
+    const skeleton = buildSkeleton({
+      shape: kind as TreeShape,
+      trunkHeight,
+      trunkRadius,
+      crownScale,
+      rand,
+    });
 
     trees.push({
       x,
@@ -598,7 +516,9 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
       trunkRadius,
       kind,
       crownScale,
-      branches,
+      segments: skeleton.segments,
+      clusters: skeleton.clusters,
+      crownBase: skeleton.crownBase,
       rotation: rand() * Math.PI * 2,
       tint: Math.floor(rand() * 6),
       lean: [(rand() - 0.5) * 0.1, (rand() - 0.5) * 0.1],
