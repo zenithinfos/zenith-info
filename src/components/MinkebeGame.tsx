@@ -17,8 +17,10 @@ import {
   step,
   weatherLabel,
 } from "@/game/engine";
+import { LEVELS, levelStatus } from "@/game/progression";
 import { CHARACTERS, getCharacter } from "@/game/characters";
 import { useI18n } from "@/i18n/LocaleProvider";
+import type { DictionaryKey } from "@/i18n/dictionary";
 import { getZone } from "@/game/levels";
 import { worldClock } from "@/game/realism";
 import { faunaScore, getSpecies } from "@/game/fauna";
@@ -383,6 +385,22 @@ export default function MinkebeGame() {
         });
       }
 
+      // Étape d'expédition terminée : on annonce la suivante, sinon le joueur
+      // ne saurait pas que la forêt vient de s'ouvrir.
+      if (result.completedLevel) {
+        const next = LEVELS[result.state.progress.levelIndex];
+        const opened = result.completedLevel.unlocks
+          .map((id) => getZone(id)?.name)
+          .filter((name): name is string => Boolean(name));
+        pushToast({
+          title: `${t("game.levelDone")} · ${t(result.completedLevel.title as DictionaryKey)}`,
+          detail:
+            (next ? `${t("game.levelNext")} · ${t(next.title as DictionaryKey)}` : t("game.expeditionDone")) +
+            (opened.length ? ` — ${opened.join(", ")}` : ""),
+          tone: "succes",
+        });
+      }
+
       const nowMs = performance.now();
       if (nowMs - lastHudRef.current > 140) {
         lastHudRef.current = nowMs;
@@ -418,7 +436,7 @@ export default function MinkebeGame() {
 
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [phase, pushToast]);
+  }, [phase, pushToast, t]);
 
   // ------------------------------------------------------------------
   // Clavier
@@ -757,6 +775,7 @@ export default function MinkebeGame() {
                     </p>
                   </div>
                   <Vitals vitals={hud.vitals} />
+                  <Objectives state={hud} label={(key) => t(key)} />
                 </div>
 
                 <div className="flex flex-col items-end gap-2">
@@ -966,7 +985,9 @@ export default function MinkebeGame() {
                   <GpsMap
                     position={hud.player.position}
                     heading={hud.player.heading}
-                    discovered={hud.visitedZones}
+                    // Les zones ouvertes par l'expédition s'affichent sur la
+                    // carte avant même qu'on y soit allé : c'est la récompense.
+                    discovered={[...hud.visitedZones, ...hud.progress.unlocks]}
                     markers={markers}
                     onClose={() => setShowMap(false)}
                   />
@@ -1168,6 +1189,60 @@ export default function MinkebeGame() {
 function formatVitals(hud: GameState | null): string {
   if (!hud) return "—";
   return `${Math.round(hud.vitals.temperature)} °C · ${Math.round(hud.vitals.wetness * 100)} % humide`;
+}
+
+/**
+ * Objectifs de l'expédition en cours.
+ *
+ * Un jeu sans but visible est une promenade. Ce panneau dit toujours où l'on en
+ * est : l'étape, ce qu'elle demande, et ce qui reste. Les libellés viennent du
+ * dictionnaire, donc la liste change de langue avec le reste de l'interface.
+ */
+function Objectives({ state, label }: { state: GameState; label: (key: DictionaryKey) => string }) {
+  const status = levelStatus(state);
+  const index = state.progress.levelIndex;
+
+  if (!status.level) {
+    return (
+      <div className="panel-tight max-w-[16rem] px-3 py-2">
+        <p className="eyebrow">{label("game.expedition")}</p>
+        <p className="text-sm font-semibold text-parchment">{label("game.expeditionDone")}</p>
+        <p className="text-[0.65rem] text-mist/60">
+          {state.progress.completed.length} / {LEVELS.length}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel-tight max-w-[16rem] px-3 py-2">
+      <p className="eyebrow">
+        {label("game.expedition")} · {index + 1}/{LEVELS.length}
+      </p>
+      <p className="display text-sm leading-tight text-parchment">
+        {label(status.level.title as DictionaryKey)}
+      </p>
+      <p className="mb-1 text-[0.62rem] leading-snug text-mist/50">
+        {label(status.level.brief as DictionaryKey)}
+      </p>
+      <ul className="space-y-0.5">
+        {status.objectives.map((entry) => (
+          <li
+            key={entry.objective.label}
+            className={`flex items-baseline gap-1.5 text-[0.68rem] ${
+              entry.done ? "text-parchment" : "text-mist/70"
+            }`}
+          >
+            <span className={entry.done ? "text-amber-glow" : "text-mist/40"}>{entry.done ? "✓" : "·"}</span>
+            <span className="flex-1 leading-snug">{label(entry.objective.label as DictionaryKey)}</span>
+            <span className="tabular-nums text-[0.62rem] text-mist/50">
+              {entry.current}/{entry.target}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function Vitals({ vitals }: { vitals: GameState["vitals"] }) {

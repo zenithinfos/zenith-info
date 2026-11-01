@@ -24,6 +24,12 @@ import {
   worldClock,
 } from "./realism";
 import { initialArsenalState, type ArsenalState } from "./hunting";
+import {
+  advanceProgress,
+  initialProgress,
+  type ExpeditionLevel,
+  type ProgressState,
+} from "./progression";
 import { swimState } from "./water";
 
 export interface PlayerState {
@@ -59,6 +65,8 @@ export interface GameState {
   visitedZones: string[];
   observedSpecies: string[];
   gadgets: GadgetState[];
+  /** Expédition en cours : objectifs, zones ouvertes. Sérialisé. */
+  progress: ProgressState;
   level: number;
   score: number;
   settings: RealismSettings;
@@ -76,7 +84,7 @@ export interface InputState {
   joystick?: { x: number; y: number } | null;
 }
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export function initialHunt(): HuntState {
   return { arsenal: initialArsenalState(), meat: 0, kills: {}, shots: 0 };
@@ -101,6 +109,7 @@ export function newGame(characterId = "michelle"): GameState {
     visitedZones: [DEFAULT_START.zone],
     observedSpecies: [],
     gadgets: initialGadgets([]),
+    progress: initialProgress(),
     level: 1,
     score: 0,
     settings: DEFAULT_REALISM,
@@ -127,6 +136,8 @@ export interface StepResult {
   enteredZone: boolean;
   observations: Species[];
   warnings: string[];
+  /** Niveau qui vient d'être terminé à ce pas de temps, s'il y en a un. */
+  completedLevel: ExpeditionLevel | null;
 }
 
 /** Fait avancer le monde d'un pas de temps (dt en secondes). */
@@ -211,7 +222,12 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
   }
 
   next.score = faunaScore(next.observedSpecies);
-  next.level = 1 + Math.floor(next.score / 160);
+
+  // Progression : si tous les objectifs de l'expédition en cours sont remplis,
+  // on passe au niveau suivant et on ouvre les zones qu'il débloque.
+  const advanced = advanceProgress(next);
+  const finalState = advanced.state;
+  finalState.level = Math.min(finalState.progress.levelIndex + 1, 5);
 
   const warnings: string[] = [];
   if (next.vitals.health < 30) warnings.push("Santé critique");
@@ -220,7 +236,14 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     warnings.push("Crocodiles à proximité");
   }
 
-  return { state: next, zone, enteredZone, observations, warnings };
+  return {
+    state: finalState,
+    zone,
+    enteredZone,
+    observations,
+    warnings,
+    completedLevel: advanced.completed,
+  };
 }
 
 function distanceToZoneCenter(species: Species, zone: Zone): number {
@@ -261,6 +284,7 @@ export function serialize(state: GameState): Record<string, unknown> {
     observedSpecies: state.observedSpecies,
     level: state.level,
     score: state.score,
+    progress: state.progress,
     hunt: {
       arsenal: state.hunt.arsenal,
       meat: Math.round(state.hunt.meat),
@@ -302,8 +326,26 @@ export function deserialize(raw: Record<string, unknown>): GameState {
       : [],
     level: typeof raw.level === "number" ? raw.level : 1,
     score: typeof raw.score === "number" ? raw.score : 0,
+    progress: deserializeProgress(raw.progress),
     gadgets: initialGadgets(Array.isArray(raw.visitedZones) ? (raw.visitedZones as string[]) : []),
     hunt: deserializeHunt(raw.hunt),
+  };
+}
+
+/**
+ * Relit la progression d'une sauvegarde.
+ *
+ * Une sauvegarde d'avant les expéditions n'en a pas : on repart du début, mais
+ * sans rien perdre du reste (tableau de chasse, viande, zones visitées).
+ */
+function deserializeProgress(raw: unknown): ProgressState {
+  const base = initialProgress();
+  if (!raw || typeof raw !== "object") return base;
+  const source = raw as Partial<ProgressState>;
+  return {
+    levelIndex: typeof source.levelIndex === "number" ? Math.max(0, source.levelIndex) : 0,
+    unlocks: Array.isArray(source.unlocks) ? source.unlocks : [],
+    completed: Array.isArray(source.completed) ? source.completed : [],
   };
 }
 

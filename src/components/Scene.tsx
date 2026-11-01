@@ -390,14 +390,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const ctx = canvas.getContext("2d");
       if (!ctx) return null;
       const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      gradient.addColorStop(0, "#7fa8c4"); // zénith
-      gradient.addColorStop(0.42, "#a8c0c4");
+      gradient.addColorStop(0, "#8babbe"); // zénith, brumeux
+      gradient.addColorStop(0.42, "#b3c2bd");
       gradient.addColorStop(0.5, "#e6dcb8"); // horizon chaud
-      gradient.addColorStop(0.56, "#6d8256");
+      gradient.addColorStop(0.56, "#5e6f47");
       // Le bas de la sphère éclaire tous les dessous de feuilles : presque noir,
       // il éteint la moitié de la forêt. Un vert de sol de forêt, lui, renvoie
       // la lumière que la canopée ne laisse pas passer.
-      gradient.addColorStop(1, "#3a4a2e"); // sol de forêt
+      gradient.addColorStop(1, "#38412b"); // sol de forêt
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -655,7 +655,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     // Litière : feuilles mortes à plat, très légèrement inclinées sur la pente.
     const litterMaterial = foliageMaterial(TEXTURES.foliagePale, {
-      tint: 0x8c7a5e,
+      tint: 0xbc8174,
       sway: 0.01,
       alphaTest: 0.5,
       normal: TEXTURES.foliageDeepNormal,
@@ -663,7 +663,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     });
 
     const sprayMaterial = foliageMaterial(TEXTURES.spray, {
-      tint: 0xf2f6ee,
+      tint: 0xf6d9c0,
       sway: 0.1,
       normal: TEXTURES.foliageNormal,
       normalScale: 0.9,
@@ -671,19 +671,23 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     const foliageMaterials = [
       foliageMaterial(TEXTURES.foliage, {
-        tint: 0xf2f6ee,
+        // Les teintes ci-dessous ne sont pas décoratives : elles corrigent le
+        // virage vert d'eau des cartes (bleu aussi fort que rouge) vers le
+        // jaune-olive d'un vrai sous-bois. Elles sont calculées à l'envers, à
+        // partir de la couleur qu'on veut obtenir — voir scripts/check-palette.
+        tint: 0xfbb092,
         sway: 0.07,
         normal: TEXTURES.foliageNormal,
         normalScale: 0.85,
       }),
       foliageMaterial(TEXTURES.foliageDeep, {
-        tint: 0xc8d4c0,
+        tint: 0xdca788,
         sway: 0.05,
         normal: TEXTURES.foliageDeepNormal,
         normalScale: 0.8,
       }),
       foliageMaterial(TEXTURES.foliagePale, {
-        tint: 0xffffff,
+        tint: 0xf1c0b4,
         sway: 0.09,
         normal: TEXTURES.foliagePaleNormal,
         normalScale: 0.9,
@@ -692,32 +696,35 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     const understoryMaterials = {
       fern: foliageMaterial(TEXTURES.fern, {
+        tint: 0xd9aa92,
         sway: 0.04,
         alphaTest: 0.38,
         normal: TEXTURES.fernNormal,
         normalScale: 0.9,
       }),
       bigleaf: foliageMaterial(TEXTURES.bigleaf, {
+        tint: 0xfab29a,
         sway: 0.05,
         alphaTest: 0.4,
         normal: TEXTURES.bigleafNormal,
         normalScale: 0.95,
       }),
       bush: foliageMaterial(TEXTURES.foliage, {
-        tint: 0xd6e0cc,
+        tint: 0xf3bc9e,
         sway: 0.1,
         alphaTest: 0.44,
         normal: TEXTURES.foliageNormal,
         normalScale: 0.8,
       }),
       cover: foliageMaterial(TEXTURES.foliageDeep, {
-        tint: 0xa8b89c,
+        tint: 0xcfa287,
         sway: 0.06,
         alphaTest: 0.46,
         normal: TEXTURES.foliagePaleNormal,
         normalScale: 0.7,
       }),
       grass: foliageMaterial(TEXTURES.grass, {
+        tint: 0xdfc4a6,
         sway: 0.16,
         alphaTest: 0.36,
         normal: TEXTURES.grassNormal,
@@ -1096,7 +1103,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // et donnent ce vert « sous la tente » propre aux forêts de terre ferme.
     const ceilingGroup = new THREE.Group();
     const ceilingMaterial = foliageMaterial(TEXTURES.canopy, {
-      tint: 0x9fb28e,
+      // La canopée vue d'en bas est en contre-jour : plus sombre et plus froide
+      // que le sous-bois, mais jamais émeraude.
+      tint: 0xb59a86,
       sway: 0.12,
       alphaTest: 0.36,
     });

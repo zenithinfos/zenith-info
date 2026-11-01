@@ -38,16 +38,16 @@ export interface SceneConfig {
 }
 
 export const FOREST_PALETTE = {
-  canopy: 0x1f3d24,
-  moss: 0x35502c,
+  canopy: 0x2a3520,
+  moss: 0x3f4a2c,
   bark: 0x4a3a2a,
   earth: 0x6b4a2f,
   laterite: 0x9a4f2b,
   river: 0x1e3b3a,
-  skyDay: 0x9fc4d8,
+  skyDay: 0xa6bcc2,
   skyDusk: 0xd98a56,
   skyNight: 0x0a1420,
-  fogDay: 0x5f7d64,
+  fogDay: 0x6e7c72,
   fogNight: 0x0b1512,
   sun: 0xffe9c4,
   moon: 0x9fb4d0,
@@ -59,7 +59,7 @@ export const SCENE_CONFIG: SceneConfig = {
   lighting: {
     ambient: { color: 0xffffff, intensity: 0.42 },
     sun: { color: FOREST_PALETTE.sun, intensity: 2.1, position: { x: 60, y: 110, z: 40 } },
-    hemisphere: { sky: 0x9fc4d8, ground: 0x2c3a24, intensity: 0.55 },
+    hemisphere: { sky: 0xa6bcc2, ground: 0x2c3a24, intensity: 0.55 },
     moon: { color: FOREST_PALETTE.moon, intensity: 0.35 },
   },
   ground: { size: 520, segments: 96, texture: "/textures/ground.jpg" },
