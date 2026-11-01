@@ -109,9 +109,26 @@ function canopySample(u, v) {
   ];
 }
 
+/**
+ * Biais moyen de la carte de normales. Elle n'est pas centrée sur 128 : sa
+ * moyenne porte une pente de 18° en travers et 29° dans l'axe, qui transformerait
+ * la rivière en miroir incliné. Le shader mesure ce biais au chargement ; ici on
+ * le calcule une fois sur les pixels.
+ */
+const NORMAL_BIAS = (() => {
+  let r = 0;
+  let g = 0;
+  for (let i = 0; i < normalTex.data.length; i += 4) {
+    r += normalTex.data[i];
+    g += normalTex.data[i + 1];
+  }
+  const count = (normalTex.data.length / 4) * 255;
+  return [r / count, g / count];
+})();
+
 function normalSample(u, v) {
   const [r, g] = sampleTex(normalTex, u, v);
-  return [r * 2 - 1, g * 2 - 1];
+  return [(r - NORMAL_BIAS[0]) * 2, (g - NORMAL_BIAS[1]) * 2];
 }
 
 /* ---------------------------------------------------------------- */
@@ -238,24 +255,42 @@ function shadeWater(field, point, eye) {
   const length = Math.hypot(flow[0], flow[1]) || 1;
   const dir = [flow[0] / length, flow[1] / length];
   const side = [-dir[1], dir[0]];
-  const advect = TIME * (0.045 + body.current * 0.055);
+  const advect = TIME * (0.45 + body.current * 0.55);
 
-  // Les UV du maillage valent (abscisse/7,5 ; travers/7,5). En aperçu on
-  // approxime par la position monde : les rides ont la même échelle, elles ne
-  // suivent simplement pas exactement les boucles du courant.
-  const uv = [point[0] / 7.5, point[2] / 7.5];
-  const dotSide = uv[0] * side[0] + uv[1] * side[1];
-  const dotDir = uv[0] * dir[0] + uv[1] * dir[1];
+  // Les rides sont exprimées dans le monde : distance le long du courant et
+  // en travers. Mélanger des UV de maillage et une direction de courant
+  // orientait les vaguelettes n'importe comment.
+  const along = point[0] * dir[0] + point[2] * dir[1];
+  const across = point[0] * side[0] + point[2] * side[1];
 
-  const nA = normalSample(dotSide * 0.9, dotDir * 0.55 - advect);
-  const nB = normalSample(dotSide * 2.6 + 0.37, dotDir * 1.9 - advect * 1.7 + 7.3);
-  const nC = normalSample(dotDir * 5.5, dotSide * 9 + TIME * 0.32);
+  const nA = normalSample(across * 0.33, along * 0.11 - advect * 0.35);
+  const nB = normalSample(across * 0.95 + 0.37, along * 0.48 - advect * 0.9 + 7.3);
+  const nC = normalSample(along * 2.4 - advect * 2.2, across * 3.1 + TIME * 0.32);
 
   const distance = Math.hypot(eye[0] - point[0], eye[1] - point[1], eye[2] - point[2]);
-  const detail = mix(1, 0.28, smoothstep(18, 85, distance));
-  const rx = (nA[0] * 0.52 + nB[0] * 0.32 + nC[0] * 0.26) * detail;
-  const ry = (nA[1] * 0.52 + nB[1] * 0.32 + nC[1] * 0.26) * detail;
-  const N = normalize3([rx * 0.62, 1, ry * 0.62]);
+  const detail = mix(1, 0.34, smoothstep(18, 85, distance));
+  let rx = (nA[0] * 0.26 + nB[0] * 0.16 + nC[0] * 0.1) * detail;
+  let ry = (nA[1] * 0.26 + nB[1] * 0.16 + nC[1] * 0.1) * detail;
+
+  // Houle analytique : mêmes trains de vagues que le shader.
+  const gust = 0.55 + 0.45 * valueNoise(along * 0.045 + TIME * 0.02, across * 0.045);
+  let dhAlong = 0;
+  let dhAcross = 0;
+  const p1 = along * 0.35 + across * 0.22 - TIME * 0.9;
+  dhAlong += 0.05 * 0.35 * Math.cos(p1);
+  dhAcross += 0.05 * 0.22 * Math.cos(p1);
+  const p2 = along * 1.1 - across * 0.45 - TIME * 1.6;
+  dhAlong += 0.022 * 1.1 * Math.cos(p2);
+  dhAcross -= 0.022 * 0.45 * Math.cos(p2);
+  const p3 = along * 2.6 + across * 1.5 - TIME * 2.3;
+  dhAlong += 0.006 * 2.6 * Math.cos(p3);
+  dhAcross += 0.006 * 1.5 * Math.cos(p3);
+  rx += dhAcross * gust * 0.9 * detail;
+  ry += dhAlong * gust * 0.9 * detail;
+
+  const slopeX = rx * side[0] + ry * dir[0];
+  const slopeZ = rx * side[1] + ry * dir[1];
+  const N = normalize3([slopeX, 1, slopeZ]);
 
   const V = normalize3([eye[0] - point[0], eye[1] - point[1], eye[2] - point[2]]);
   const ndv = clamp(N[0] * V[0] + N[1] * V[1] + N[2] * V[2], 0, 1);
@@ -282,38 +317,47 @@ function shadeWater(field, point, eye) {
   const shadeValue = (canopyMix[0] + canopyMix[1] + canopyMix[2]) / 3;
   void shade;
   const envColour = envBase.map(
-    (c) => c * mix(0.45, 1.7, smoothstep(0.03, 0.4, shadeValue)),
+    (c) => c * mix(0.38, 1.8, smoothstep(0.03, 0.4, shadeValue)),
   );
-  const sky = mix3(CANOPY_COLOUR, envColour, 0.62);
+  const sky = mix3(CANOPY_COLOUR, envColour, 0.68);
 
   const half = normalize3([SUN_DIR[0] + V[0], SUN_DIR[1] + V[1], SUN_DIR[2] + V[2]]);
   const ndh = Math.max(N[0] * half[0] + N[1] * half[1] + N[2] * half[2], 0);
-  const glitter = smoothstep(0.55, 1, valueNoise(uv[0] * 90 - dir[0] * TIME * 0.8, uv[1] * 90 - dir[1] * TIME * 0.8));
+  const glitter = smoothstep(
+    0.55,
+    1,
+    valueNoise(point[0] * 9 - dir[0] * TIME * 0.8, point[2] * 9 - dir[1] * TIME * 0.8),
+  );
   const glint =
     Math.pow(ndh, 900) * (1.6 + glitter * 5.5) +
-    Math.pow(ndh, 48) * 0.18 * (1 - detail * 0.5);
+    Math.pow(ndh, 48) * 0.09 * (1 - detail * 0.5);
 
-  const shoreBand = 1 - smoothstep(0, 0.55, -field.edge);
+  const shoreBand = 1 - smoothstep(0, 0.42, -field.edge);
   let foam = 0;
   if (shoreBand > 0.001) {
-    const bu = uv[0] * 9 + dir[0] * TIME * 0.32;
-    const bv = uv[1] * 5 + dir[1] * TIME * 0.32;
+    const patches = valueNoise(
+      point[0] * 0.55 + dir[0] * TIME * 0.22,
+      point[2] * 0.55 + dir[1] * TIME * 0.22,
+    );
+    const bu = point[0] * 2.1 + dir[0] * TIME * 0.32;
+    const bv = point[2] * 2.1 + dir[1] * TIME * 0.32;
     let bands = valueNoise(bu, bv);
-    bands += valueNoise(bu * 2.7 - dir[0] * TIME * 0.5, bv * 2.7 - dir[1] * TIME * 0.5) * 0.5;
-    foam = shoreBand * shoreBand * smoothstep(0.72, 1.05, bands) * 0.5;
+    bands += valueNoise(bu * 2.5 - dir[0] * TIME * 0.5, bv * 2.5 - dir[1] * TIME * 0.5) * 0.5;
+    const threshold = mix(0.95, 0.6, smoothstep(0.25, 0.85, patches));
+    foam = shoreBand * shoreBand * smoothstep(threshold, threshold + 0.32, bands) * 0.55;
   }
-  const wetEdge = 1 - smoothstep(0, 0.3, Math.abs(field.edge));
+  const wetEdge = 1 - smoothstep(0, 0.55, Math.abs(field.edge));
 
   const colour = mix3(waterBody, sky, fresnel);
   for (let k = 0; k < 3; k++) {
     colour[k] += SUN_COLOUR[k] * glint * SUN_INTENSITY;
-    colour[k] += shallow[k] * 0.22 * (1 - absorb) * SUN_INTENSITY;
+    colour[k] += shallow[k] * 0.13 * (1 - absorb) * SUN_INTENSITY;
     colour[k] = mix(colour[k], SUN_COLOUR[k] * 0.8, foam * 0.55);
-    colour[k] *= 1 - wetEdge * 0.28;
+    colour[k] *= 1 - wetEdge * 0.3;
   }
 
   const alpha = clamp(
-    mix(0.7, body.opacity, smoothstep(0, 1.2, -field.edge)) + fresnel * 0.55 + foam * 0.2,
+    mix(0.4, body.opacity, smoothstep(0, 1.3, field.depth)) + fresnel * 0.5 + foam * 0.2,
     0,
     1,
   ) * (1 - smoothstep(0, 0.25, field.edge));
@@ -342,11 +386,16 @@ function shadeGround(point, wet) {
 /* ---------------------------------------------------------------- */
 
 const VIEWS = [
-  // Depuis la berge, à hauteur d'œil : c'est le cadrage où l'on juge si une
-  // surface d'eau ressemble à de l'eau.
-  { name: "riviere", eye: [-64, 1.9, 96], target: [-82, -0.35, 106] },
-  { name: "ruisseau", eye: [-30, 1.55, 116], target: [-42, -0.3, 128] },
-  { name: "bai", eye: [28, 1.65, 138], target: [46, -0.22, 156] },
+  // Depuis la berge, à hauteur d'œil, cadrage bas et resserré : l'eau doit
+  // occuper les deux tiers bas de l'image, pas une bande à l'horizon.
+  { name: "riviere", eye: [-64, 1.55, 96], target: [-75, -0.2, 112] },
+  { name: "ruisseau", eye: [-40, 1.35, 132.5], target: [-58, -0.15, 124] },
+  { name: "bai", eye: [30, 1.5, 145], target: [44, -0.1, 162] },
+  { name: "marais", eye: [-14, 1.4, 196], target: [-34, -0.05, 210] },
+  // Deux cadrages serrés : à trois mètres de la rive, on juge les rides ;
+  // à quarante-cinq degrés, on juge la rupture de la surface.
+  { name: "pres", eye: [-66, 1.15, 100], target: [-69, -0.34, 103] },
+  { name: "plongeant", eye: [-70, 3.2, 98], target: [-84, -0.36, 104] },
 ];
 
 async function renderView(view, outFile) {

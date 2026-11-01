@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Scene, { type SceneController } from "./Scene";
+import Scene, { type SceneController, type SceneView } from "./Scene";
 import CompassBar, { type Waypoint } from "./CompassBar";
 import GpsMap, { type MapMarker } from "./GpsMap";
 import TouchControls, { type TouchVector } from "./TouchControls";
@@ -249,6 +249,12 @@ export default function MinkebeGame() {
     });
   }, [commitHunt, pushToast]);
 
+  /** Point de vue : à l'épaule par défaut, le personnage doit exister. */
+  const [view, setView] = useState<SceneView>("troisieme");
+  useEffect(() => {
+    sceneRef.current?.setView(view);
+  }, [view]);
+
   const actionsRef = useRef({
     equip: (id: WeaponId) => {
       void id;
@@ -456,6 +462,9 @@ export default function MinkebeGame() {
       }
       if (event.code === "KeyF" && document.pointerLockElement === null) {
         sceneRef.current?.requestLook();
+      }
+      if (event.code === "KeyV") {
+        setView((current) => (current === "premier" ? "troisieme" : "premier"));
       }
     };
 
@@ -866,6 +875,9 @@ export default function MinkebeGame() {
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">R</kbd>
                     <span>recharger</span>
                     <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">V</kbd>
+                    <span>vue</span>
+                    <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Échap</kbd>
                     <span>pause</span>
                   </div>
@@ -878,6 +890,14 @@ export default function MinkebeGame() {
                 <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
                   <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => setShowMap((v) => !v)}>
                     🗺️ Carte <kbd className="opacity-50">M</kbd>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost !px-3 !py-1.5 !text-xs"
+                    onClick={() => setView((v) => (v === "premier" ? "troisieme" : "premier"))}
+                    aria-pressed={view === "troisieme"}
+                  >
+                    {view === "troisieme" ? "🎥 Épaule" : "👁️ Première"} <kbd className="opacity-50">V</kbd>
                   </button>
                   <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => void saveGame()}>
                     💾 Sauvegarder

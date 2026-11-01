@@ -75,6 +75,7 @@ const vertexShader = /* glsl */ `
 
 const fragmentShader = /* glsl */ `
   uniform sampler2D uNormal;
+  uniform vec2 uNormalBias;
   uniform float uTime;
   uniform float uCurrent;
   uniform float uOpacity;
@@ -115,24 +116,58 @@ const fragmentShader = /* glsl */ `
   void main() {
     vec2 dir = normalize(vFlow + vec2(0.0001));
     vec2 side = vec2(-dir.y, dir.x);
-    float advect = uTime * (0.045 + uCurrent * 0.055);
+    // Les rides vivent dans le monde, pas dans les UV : mêler un vecteur UV
+    // (le long de la bande) et une direction de courant (x/z monde) orientait
+    // les vaguelettes n'importe comment selon la forme du maillage.
+    float along = dot(vWorldPos.xz, dir);
+    float across = dot(vWorldPos.xz, side);
+    float advect = uTime * (0.45 + uCurrent * 0.55);
 
-    // Rides larges, entraînées par le courant.
-    vec2 uvA = vec2(dot(vUv, side) * 0.9, dot(vUv, dir) * 0.55) - dir * advect;
-    vec2 uvB = vec2(dot(vUv, side) * 2.6, dot(vUv, dir) * 1.9) - dir * advect * 1.7 + 7.3;
-    vec2 nA = texture2D(uNormal, uvA).xy * 2.0 - 1.0;
-    vec2 nB = texture2D(uNormal, uvB).xy * 2.0 - 1.0;
+    // Trois échelles : houle de quelques mètres, clapot de cinquante
+    // centimètres, et clapot fin. Les deux premières sont étirées le long du
+    // courant — une rivière fait des traînées, pas des ronds dans l'eau.
+    vec2 uvA = vec2(across * 0.33, along * 0.11 - advect * 0.35);
+    vec2 uvB = vec2(across * 0.95 + 0.37, along * 0.48 - advect * 0.9 + 7.3);
+    // La carte de normales n'est pas centrée sur 128 : mesurée, elle porte une
+    // pente moyenne de 18° en travers et 29° dans l'axe. Sans corriger ce
+    // biais, la rivière entière est un miroir incliné et les rides, qui ne
+    // font que ±0,25, disparaissent dessous.
+    vec2 nA = (texture2D(uNormal, uvA).xy - uNormalBias) * 2.0;
+    vec2 nB = (texture2D(uNormal, uvB).xy - uNormalBias) * 2.0;
 
-    // Rides fines, presque perpendiculaires : elles cassent le reflet en
-    // millions de facettes, c'est ce qui distingue une eau vivante d'un miroir.
-    vec2 uvC = vec2(dot(vUv, dir) * 5.5, dot(vUv, side) * 9.0 + uTime * 0.32);
-    vec2 nC = texture2D(uNormal, uvC).xy * 2.0 - 1.0;
+    // Clapot fin, presque isotrope : il casse le reflet en facettes.
+    vec2 uvC = vec2(along * 2.4 - advect * 2.2, across * 3.1 + uTime * 0.32);
+    vec2 nC = (texture2D(uNormal, uvC).xy - uNormalBias) * 2.0;
 
     // Les rides s'atténuent avec la distance : au loin, elles ne feraient que
     // scintiller et laisser voir la répétition de la carte de normales.
-    float detail = mix(1.0, 0.28, smoothstep(18.0, 85.0, vViewDepth));
-    vec2 ripple = (nA * 0.52 + nB * 0.32 + nC * 0.26) * detail;
-    vec3 N = normalize(vec3(ripple.x * 0.62, 1.0, ripple.y * 0.62));
+    float detail = mix(1.0, 0.34, smoothstep(18.0, 85.0, vViewDepth));
+    vec2 ripple = (nA * 0.26 + nB * 0.16 + nC * 0.1) * detail;
+
+    // Houle analytique : trois trains de vagues orientés par le courant. La
+    // carte de normales seule donne une surface molle — des ondulations
+    // calculées, dont on connaît exactement la pente, donnent le clapot qui
+    // accroche le soleil. Les rafales de vent les regroupent par plaques.
+    float gust = 0.55 + 0.45 * valueNoise(vec2(along, across) * 0.045 + uTime * 0.02);
+    float dhAlong = 0.0;
+    float dhAcross = 0.0;
+    float p1 = along * 0.35 + across * 0.22 - uTime * 0.9;
+    dhAlong += 0.05 * 0.35 * cos(p1);
+    dhAcross += 0.05 * 0.22 * cos(p1);
+    float p2 = along * 1.1 - across * 0.45 - uTime * 1.6;
+    dhAlong += 0.022 * 1.1 * cos(p2);
+    dhAcross -= 0.022 * 0.45 * cos(p2);
+    float p3 = along * 2.6 + across * 1.5 - uTime * 2.3;
+    dhAlong += 0.006 * 2.6 * cos(p3);
+    dhAcross += 0.006 * 1.5 * cos(p3);
+    ripple += vec2(dhAcross, dhAlong) * gust * 0.9 * detail;
+
+    // Retour de l'espace (travers, courant) vers le monde x/z.
+    vec2 slope = vec2(
+      ripple.x * side.x + ripple.y * dir.x,
+      ripple.x * side.y + ripple.y * dir.y
+    );
+    vec3 N = normalize(vec3(slope.x, 1.0, slope.y));
 
     vec3 V = normalize(cameraPosition - vWorldPos);
     float ndv = clamp(dot(N, V), 0.0, 1.0);
@@ -157,8 +192,10 @@ const fragmentShader = /* glsl */ `
     vec4 canopyTex = texture2D(uCanopyTex, envUv * vec2(3.0, 2.2));
     vec3 canopy = mix(vec3(0.09, 0.13, 0.08), canopyTex.rgb, canopyTex.a * 0.9);
     float shade = dot(canopy, vec3(0.3333));
-    envColour *= mix(0.45, 1.7, smoothstep(0.03, 0.4, shade));
-    vec3 sky = mix(uCanopy, envColour, 0.62);
+    envColour *= mix(0.38, 1.8, smoothstep(0.03, 0.4, shade));
+    // Le couvert n'est pas un gris uniforme : ses trous de lumière sont ce
+    // qui met des taches claires au milieu des reflets sombres.
+    vec3 sky = mix(uCanopy, envColour, 0.68);
 
     // Éclat solaire. Le lobe serré seul donne une tache lisse : on le module
     // par un bruit fin pour obtenir des éclairs — ce pétillement est ce qui
@@ -168,37 +205,47 @@ const fragmentShader = /* glsl */ `
     float glitter = smoothstep(0.55, 1.0, valueNoise(vUv * 90.0 - dir * uTime * 0.8));
     float glint =
       pow(ndh, 900.0) * (1.6 + glitter * 5.5) +
-      pow(ndh, 48.0) * 0.18 * (1.0 - detail * 0.5);
+      pow(ndh, 48.0) * 0.09 * (1.0 - detail * 0.5);
 
     // Écume : un liseré de quelques dizaines de centimètres, pas une plage.
     // vEdge est en unités, ce qui rend la largeur indépendante de la taille
     // du plan d'eau (un ruisseau et l'Ivindo n'ont pas la même écume).
-    float shoreBand = 1.0 - smoothstep(0.0, 0.55, -vEdge);
+    float shoreBand = 1.0 - smoothstep(0.0, 0.42, -vEdge);
     float foam = 0.0;
     if (shoreBand > 0.001) {
-      float bands = valueNoise(vUv * vec2(9.0, 5.0) + dir * uTime * 0.32);
-      bands += valueNoise(vUv * 23.0 - dir * uTime * 0.5) * 0.5;
+      // Écume cassée : de larges plaques lentes, puis un grain serré qui
+      // décide où la mousse tient. Sans le second terme, la rive blanchit
+      // d'un trait continu — un liseré de savon.
+      float patches = valueNoise(vWorldPos.xz * 0.55 + dir * uTime * 0.22);
+      float bands = valueNoise(vWorldPos.xz * 2.1 + dir * uTime * 0.32);
+      bands += valueNoise(vWorldPos.xz * 5.3 - dir * uTime * 0.5) * 0.5;
+      float threshold = mix(0.95, 0.6, smoothstep(0.25, 0.85, patches));
       // Une eau noire ne mousse presque pas : un liseré clairsemé, pas une
       // plage. Le terme au carré concentre tout contre la rive.
-      foam = shoreBand * shoreBand * smoothstep(0.72, 1.05, bands) * 0.5;
+      foam = shoreBand * shoreBand * smoothstep(threshold, threshold + 0.32, bands) * 0.55;
     }
     // Liseré sombre de vase mouillée, juste à la ligne d'eau.
-    float wetEdge = 1.0 - smoothstep(0.0, 0.3, abs(vEdge));
+    float wetEdge = 1.0 - smoothstep(0.0, 0.55, abs(vEdge));
 
     vec3 color = mix(body, sky, fresnel);
     color += uSunColor * glint * uSunIntensity;
     // La lumière traverse la lame d'eau au bord : un vert chaud dans les
     // premiers centimètres.
-    color += uShallow * 0.22 * (1.0 - absorb) * uSunIntensity;
+    color += uShallow * 0.13 * (1.0 - absorb) * uSunIntensity;
     color = mix(color, uSunColor * 0.8, foam * 0.55);
-    color *= 1.0 - wetEdge * 0.28;
+    color *= 1.0 - wetEdge * 0.3;
 
     // Eau noire : opaque à un mètre de la rive, translucide seulement sur la
     // lame d'eau qui mouille la vase.
-    float alpha = mix(0.7, uOpacity, smoothstep(0.0, 1.2, -vEdge));
-    alpha = clamp(alpha + fresnel * 0.55 + foam * 0.2, 0.0, 1.0);
+    // Eau claire sur les vingt premiers centimètres — on voit la vase — puis
+    // opaque dès qu'il y a de la profondeur. Un plan uniformément translucide
+    // donnait un voile de plastique vert sur toute la rivière.
+    float alpha = mix(0.4, uOpacity, smoothstep(0.0, 1.3, vDepth));
+    alpha = clamp(alpha + fresnel * 0.5 + foam * 0.2, 0.0, 1.0);
     // Le débord du maillage sur la berge s'efface en 25 cm (vEdge devient
     // positif hors de l'eau).
+    // vEdge est négatif dans l'eau : le facteur vaut 1 à l'intérieur et
+    // s'éteint sur la berge, là où le maillage déborde.
     alpha *= 1.0 - smoothstep(0.0, 0.25, vEdge);
 
     float fogFactor = 1.0 - exp(-pow(vViewDepth * uFogDensity, 2.0));
@@ -243,6 +290,7 @@ export function createWaterSurface(body: WaterBody): WaterSurface {
     uEnv: { value: null as THREE.Texture | null },
     uCanopyTex: { value: null as THREE.Texture | null },
     uNormal: { value: null as THREE.Texture | null },
+    uNormalBias: { value: new THREE.Vector2(0.5, 0.5) },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -301,11 +349,57 @@ export function setWaterCanopy(surface: WaterSurface, texture: THREE.Texture) {
 }
 
 /** Applique la carte de normales une fois qu'elle est chargée. */
+/**
+ * Mesure la valeur moyenne d'une carte de normales.
+ *
+ * Une carte correcte est centrée sur (0,5 ; 0,5) : sa moyenne vaut le neutre.
+ * Celle du projet a été générée avec une pente résiduelle, et un miroir incliné
+ * ne scintille pas — il réfléchit le ciel d'un seul bloc. On mesure le biais au
+ * chargement plutôt que de retoucher l'image : la correction reste juste même
+ * si la texture est regénérée.
+ */
+export function measureNormalBias(texture: THREE.Texture): THREE.Vector2 | null {
+  if (typeof document === "undefined") return null;
+  const image = texture.image as HTMLImageElement | HTMLCanvasElement | undefined;
+  if (!image) return null;
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  try {
+    context.drawImage(image, 0, 0, size, size);
+    const data = context.getImageData(0, 0, size, size).data;
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      x += data[i];
+      y += data[i + 1];
+    }
+    const count = (size * size) / 255;
+    return new THREE.Vector2(x / count, y / count);
+  } catch {
+    // Canvas souillé (texture venue d'un autre domaine) : on garde le neutre.
+    return null;
+  }
+}
+
 export function setWaterNormal(surface: WaterSurface, texture: THREE.Texture) {
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   const material = surface.mesh.material as THREE.ShaderMaterial;
   const previous = material.uniforms.uNormal.value as THREE.Texture | null;
   material.uniforms.uNormal.value = texture;
+  if (texture.image && !texture.userData.biasMeasured) {
+    const bias = measureNormalBias(texture);
+    if (bias) {
+      material.uniforms.uNormalBias.value = bias;
+      texture.userData.bias = bias;
+      texture.userData.biasMeasured = true;
+    }
+  } else if (texture.userData.biasMeasured) {
+    material.uniforms.uNormalBias.value = texture.userData.bias as THREE.Vector2;
+  }
   if (previous instanceof THREE.DataTexture) previous.dispose();
 }

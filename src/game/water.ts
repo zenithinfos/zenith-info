@@ -69,7 +69,7 @@ export const WATER_BODIES: WaterBody[] = [
     current: 1.6,
     color: 0x16302f,
     opacity: 0.88,
-    shallow: 0x59563a,
+    shallow: 0x3d3a25,
     deep: 0x0a1512,
     seed: 3.1,
   },
@@ -92,7 +92,7 @@ export const WATER_BODIES: WaterBody[] = [
     current: 0.8,
     color: 0x1d2a22,
     opacity: 0.8,
-    shallow: 0x5d5740,
+    shallow: 0x43402c,
     deep: 0x121b14,
     seed: 7.4,
   },
@@ -404,7 +404,7 @@ export interface SurfaceData {
  * son opacité tombe à zéro sur ce débord : la jonction avec la terre ne se
  * voit pas.
  */
-export function waterRibbon(body: WaterBody, step = 1.6, columns = 12): SurfaceData {
+export function waterRibbon(body: WaterBody, step = 0.8, columns = 28): SurfaceData {
   const data: SurfaceData = {
     positions: [],
     uvs: [],
@@ -488,7 +488,7 @@ export function waterRibbon(body: WaterBody, step = 1.6, columns = 12): SurfaceD
 }
 
 /** Surface d'une étendue : disque à anneaux concentriques. */
-export function waterDisc(body: WaterBody, rings = 7, segments = 64): SurfaceData {
+export function waterDisc(body: WaterBody, rings = 12, segments = 96): SurfaceData {
   const data: SurfaceData = {
     positions: [],
     uvs: [],

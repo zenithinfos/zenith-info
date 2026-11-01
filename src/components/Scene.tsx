@@ -14,8 +14,8 @@ import {
   TEXTURES,
   qualityBudget,
 } from "@/game/sceneConfig";
-import { WATER_BODIES, rainParams } from "@/game/water";
-import { ZONES } from "@/game/levels";
+import { WATER_BODIES, rainParams, waterDepthAt, waterLevelAt } from "@/game/water";
+import { DEFAULT_START, ZONES } from "@/game/levels";
 import {
   buildTile,
   plantCards,
@@ -39,6 +39,17 @@ import {
 } from "./WaterSurface";
 import { createViewModel, type ViewModel } from "./WeaponView";
 import { createAnimalRig, disposeAnimalRig, poseAnimal, type AnimalRig } from "./AnimalModel";
+import {
+  HUMAN_EYE_Y,
+  createHumanRig,
+  disposeHumanRig,
+  humanKick,
+  humanSlash,
+  poseHuman,
+  setHumanWeapon,
+  type HumanMotion,
+  type HumanRig,
+} from "./HumanModel";
 
 /**
  * Scène 3D de la réserve.
@@ -55,6 +66,8 @@ import { createAnimalRig, disposeAnimalRig, poseAnimal, type AnimalRig } from ".
  *   · plafond de canopée + brouillard : on ne voit jamais le ciel depuis le
  *     sentier, sauf dans les bais.
  */
+
+export type SceneView = "premier" | "troisieme";
 
 export interface SceneController {
   setPlayer: (position: [number, number, number], heading: number, motion: string) => void;
@@ -82,6 +95,13 @@ export interface SceneController {
   setAiming: (aiming: boolean) => void;
   /** Retour visuel d'un tir : recul, éclair de bouche, coup de lame. */
   fireFeedback: (id: WeaponId) => void;
+  /**
+   * Point de vue : à l'épaule (le personnage est visible) ou subjectif.
+   * La vue subjective garde les mains devant la caméra ; la vue à l'épaule
+   * montre le corps entier et sert de référence pour juger les animations.
+   */
+  setView: (view: SceneView) => void;
+  getView: () => SceneView;
   /** Rayon de visée depuis l'œil, en coordonnées monde. */
   getAim: () => { origin: [number, number, number]; direction: [number, number, number] };
   /** Nombre d'arbres effectivement générés (diagnostic / HUD). */
@@ -1227,6 +1247,17 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     scene.add(camera);
 
     // ------------------------------------------------------------------
+    // Personnage en pied
+    // ------------------------------------------------------------------
+    // Il n'est visible qu'à l'épaule, mais il est construit dans tous les cas :
+    // basculer de vue ne doit jamais provoquer de génération d'uniformes au
+    // milieu d'un mouvement.
+    const playerRig: HumanRig = createHumanRig();
+    setHumanWeapon(playerRig, "machette");
+    playerRig.group.visible = false;
+    scene.add(playerRig.group);
+
+    // ------------------------------------------------------------------
     // Pluie et lucioles
     // ------------------------------------------------------------------
     const rainCount = isMobile ? 1400 : 2600;
@@ -1489,6 +1520,13 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     let animalSnapshot: Animal[] = [];
     const animalRigs = new Map<number, AnimalRig>();
 
+    // Points de vue et suivi du personnage.
+    let viewMode: SceneView = "troisieme";
+    let rigYaw = DEFAULT_START.heading;
+    let previousPlayerX = 0;
+    let previousPlayerZ = 6;
+    const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
+
     const animate = () => {
       raf = requestAnimationFrame(animate);
       const now = performance.now();
@@ -1512,19 +1550,87 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const bobAmplitude = moving ? (currentMotion === "run" ? 0.075 : 0.035) : 0;
       const sway = moving ? Math.sin(bob * 0.5) * 0.012 : 0;
 
-      const eyeHeight = 1.62;
       const groundUnderPlayer = terrainHeight(playerPosition.x, playerPosition.z);
-      camera.position.set(
-        playerPosition.x + sway,
-        groundUnderPlayer + eyeHeight + Math.abs(Math.sin(bob)) * bobAmplitude,
-        playerPosition.z,
-      );
-
       const targetYaw = targetHeading + yaw - Math.PI;
+
+      // Déplacement réel depuis l'image précédente : c'est la seule source
+      // fiable pour savoir de quel côté le personnage doit regarder.
+      const stepX = playerPosition.x - previousPlayerX;
+      const stepZ = playerPosition.z - previousPlayerZ;
+      const stepLength = Math.hypot(stepX, stepZ);
+      previousPlayerX = playerPosition.x;
+      previousPlayerZ = playerPosition.z;
+
+      const inWater = waterDepthAt(playerPosition.x, playerPosition.z) > 0.15;
+      const bodyY = inWater
+        ? Math.min(groundUnderPlayer + 1.1, waterLevelAt(playerPosition.x, playerPosition.z) - 0.75)
+        : groundUnderPlayer;
+
+      if (viewMode === "troisieme") {
+        playerRig.group.visible = true;
+        playerRig.group.position.set(playerPosition.x, bodyY, playerPosition.z);
+        if (stepLength > 0.0015) {
+          // Il marche là où il va, pas là où la caméra pointe.
+          const desired = Math.atan2(-stepX, -stepZ);
+          rigYaw += wrapAngle(desired - rigYaw) * Math.min(1, dt * 9);
+        } else if (aiming) {
+          // Immobile et en joue : le corps pivote avec le regard.
+          rigYaw += wrapAngle(targetYaw - rigYaw) * Math.min(1, dt * 6);
+        }
+        playerRig.group.rotation.y = rigYaw;
+        poseHuman(playerRig, {
+          dt,
+          motion: (inWater ? "swim" : currentMotion) as HumanMotion,
+          speed: stepLength / Math.max(dt, 1e-4),
+          aiming,
+          aimYaw: wrapAngle(targetYaw - rigYaw),
+          aimPitch: pitch,
+        });
+      } else {
+        playerRig.group.visible = false;
+      }
+
       camera.rotation.order = "YXZ";
-      camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.18);
-      camera.rotation.x = pitch;
-      camera.rotation.z = Math.sin(bob * 0.5) * 0.004;
+      if (viewMode === "premier") {
+        camera.position.set(
+          playerPosition.x + sway,
+          groundUnderPlayer + HUMAN_EYE_Y + Math.abs(Math.sin(bob)) * bobAmplitude,
+          playerPosition.z,
+        );
+        camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.18);
+        camera.rotation.x = pitch;
+        camera.rotation.z = Math.sin(bob * 0.5) * 0.004;
+      } else {
+        // Caméra à l'épaule : elle regarde le personnage de dos, décalée à
+        // droite, et se rapproche quand on épaule.
+        const distance = aiming ? 1.5 : 3.1;
+        const side = aiming ? 0.4 : 0.18;
+        const pivotY = bodyY + 1.42 + Math.abs(Math.sin(bob)) * bobAmplitude * 0.5;
+        const cosPitch = Math.cos(pitch);
+        const forwardX = -Math.sin(targetYaw) * cosPitch;
+        const forwardY = Math.sin(pitch);
+        const forwardZ = -Math.cos(targetYaw) * cosPitch;
+        const rightX = Math.cos(targetYaw);
+        const rightZ = -Math.sin(targetYaw);
+
+        const desiredX = playerPosition.x - forwardX * distance + rightX * side;
+        const desiredZ = playerPosition.z - forwardZ * distance + rightZ * side;
+        const desiredY = pivotY - forwardY * distance + 0.16;
+        // Amorti exponentiel : indépendant de la cadence d'images.
+        const ease = 1 - Math.exp(-dt * 18);
+        camera.position.x += (desiredX - camera.position.x) * ease;
+        camera.position.y += (desiredY - camera.position.y) * ease;
+        camera.position.z += (desiredZ - camera.position.z) * ease;
+
+        // Jamais sous le sol, jamais dans la pente.
+        const floor = terrainHeight(camera.position.x, camera.position.z) + 0.42;
+        if (camera.position.y < floor) camera.position.y = floor;
+
+        camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.3);
+        camera.rotation.x = pitch;
+        camera.rotation.z = 0;
+      }
+      viewModel.group.visible = viewMode === "premier";
 
       // Eau : le clapot est calculé dans le vertex shader, on ne pousse que les
       // uniformes (soleil, brouillard, reflet du couvert).
@@ -1739,22 +1845,48 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       },
       setWeapon(id) {
         viewModel.setWeapon(id);
+        setHumanWeapon(playerRig, id);
       },
       setAiming(value) {
         aiming = value;
         viewModel.setAiming(value);
       },
       fireFeedback(id) {
-        if (id === "couteau" || id === "machette" || id === "lance") viewModel.slash();
-        else viewModel.kick(id === "m16" ? 0.8 : 1);
+        if (id === "couteau" || id === "machette" || id === "lance") {
+          viewModel.slash();
+          humanSlash(playerRig);
+        } else {
+          const strength = id === "m16" ? 0.8 : 1;
+          viewModel.kick(strength);
+          humanKick(playerRig, strength);
+        }
       },
       getAim() {
         const direction = new THREE.Vector3();
         camera.getWorldDirection(direction);
+        // Le rayon garde la ligne du réticule, mais part de l'épaule : sans
+        // cela, un coup de couteau porterait à six mètres.
+        const behind = Math.hypot(
+          playerPosition.x - camera.position.x,
+          playerPosition.z - camera.position.z,
+        );
+        const ahead = viewMode === "troisieme" ? Math.max(0, behind - 0.35) : 0;
         return {
-          origin: [camera.position.x, camera.position.y, camera.position.z],
+          origin: [
+            camera.position.x + direction.x * ahead,
+            camera.position.y + direction.y * ahead,
+            camera.position.z + direction.z * ahead,
+          ],
           direction: [direction.x, direction.y, direction.z],
         };
+      },
+      setView(view) {
+        viewMode = view;
+        viewModel.group.visible = view === "premier";
+        playerRig.group.visible = view === "troisieme";
+      },
+      getView() {
+        return viewMode;
       },
       getYaw() {
         return yaw;
@@ -1794,6 +1926,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         for (const surface of waterSurfaces) surface.dispose();
         for (const [, rig] of animalRigs) disposeAnimalRig(rig);
         animalRigs.clear();
+        disposeHumanRig(playerRig);
         viewModel.dispose();
         textures.forEach((texture) => texture.dispose());
         shaftTexture.dispose();

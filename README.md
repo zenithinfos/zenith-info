@@ -33,7 +33,9 @@ sauvegardes, salons et paiements fonctionnent en mémoire (perdus au redémarrag
 | `npm run check:forest` | Mesure la densité de la forêt (ciel visible, placement) |
 | `npm run check:hunt` | Vérifie les cours d'eau, la balistique et la faune |
 | `npm run preview:water` | Rend les cours d'eau hors navigateur (`preview/eau-*.png`) |
+| `npm run check:human` | Vérifie le squelette, la prise en main des armes, la marche |
 | `npm run preview:faune` | Planche de proportions de la faune (`preview/faune.png`) |
+| `npm run preview:perso` | Rendu logiciel du personnage (`preview/personnage.png`) |
 | `npm run db:push` | Applique le schéma Drizzle à PostgreSQL |
 
 ---
@@ -159,6 +161,14 @@ La forêt est générée par des modules purs, testables sans navigateur :
 | `src/game/animals.ts` | Morphologie, déplacement, fuite, dégâts, dépeçage |
 | `src/game/hunting.ts` | Armes, balistique, munitions, viande |
 
+Le personnage et les armes ont leurs propres modules de rendu :
+
+| Module | Rôle |
+|---|---|
+| `src/components/HumanModel.ts` | Squelette articulé, animation, IK des bras |
+| `src/components/WeaponModels.ts` | Les cinq armes, détachées de toute main |
+| `src/components/WeaponView.ts` | Vue subjective : avant-bras et arme devant la caméra |
+
 Principes de rendu :
 
 - **Aucune matière n'est dessinée par du code.** Le sol (litière, racines,
@@ -225,8 +235,25 @@ Le shading est un shader dédié (`components/WaterSurface.ts`) :
 - absorption de Beer-Lambert : vase au bord, tanin presque noir au fond ;
 - Fresnel et reflet de l'environnement **modulé par le feuillage** — l'eau
   reflète le couvert, pas un ciel vide ;
+- **houle analytique** : trois trains de vagues orientés par le courant, dont
+  on connaît la pente exacte, regroupés en plaques par des rafales de vent ;
 - pétillement solaire bruité (deux lobes, sans quoi un seul donne une tache
-  lisse), écume de berge sur cinquante centimètres, brouillard exponentiel.
+  lisse), écume de berge cassée en plaques, brouillard exponentiel.
+
+Deux corrections de fond, trouvées en comparant le rendu logiciel au shader :
+
+- les rides étaient échantillonnées en mélangeant des coordonnées UV (le long
+  du ruban) et la direction du courant (x/z du monde). Les vaguelettes
+  n'étaient donc orientées correctement que par hasard, selon la forme du
+  maillage. Elles sont maintenant exprimées en **mètres le long et en travers
+  du courant**, puis reconverties vers le monde ;
+- la carte de normales n'est pas centrée sur 128 : sa moyenne vaut (0,67 ;
+  0,78), soit une pente de 18° en travers et 29° dans l'axe. La rivière était
+  donc un miroir incliné, et les rides — qui ne font que ±0,25 — disparaissaient
+  dessous. Le biais est mesuré au chargement et retranché dans le shader.
+
+Le maillage a aussi été resserré (0,8 m le long, 28 colonnes en travers,
+12 anneaux pour les mares) : à 1,6 m la ligne d'eau faisait des zigzags.
 
 Contrôle hors navigateur : `npm run preview:water` rejoue la même formule en
 JavaScript sur le même champ de distance. Ce n'est pas une capture du jeu —
@@ -263,6 +290,39 @@ tableau de chasse sont sauvegardés avec l'expédition.
 
 Contrôle : `npm run check:hunt` (balistique, munitions, dépeçage, géométrie
 des rives, comportement de la harde).
+
+## Personnages
+
+La vue subjective ne montrait que deux avant-bras : impossible de dire qui
+tenait le fusil. Le personnage existe désormais en entier — et se voit, puisque
+la caméra se place **à l'épaule** par défaut (touche `V` pour repasser en vue
+subjective).
+
+`components/HumanModel.ts` construit un squelette hiérarchique : hanches →
+colonne → poitrine → épaules, cou, tête ; cuisses → genoux → chevilles. Rien
+n'est pré-animé : la marche, la course, l'accroupi et la respiration sont
+calculés image par image.
+
+- **Les jambes** oscillent à la cadence de la vitesse réelle, genoux fléchis au
+  retour, pieds remis à plat, bassin qui plonge à chaque appui.
+- **Les bras** passent par une résolution à deux os (IK analytique) : on donne
+  la position de la main, le solveur place l'épaule et le coude. C'est ce qui
+  fait que la main droite tombe sur la poignée et la gauche sur le garde-main
+  de chaque arme, au lieu de flotter à côté.
+- **La tête** suit le regard avec un retard sur le buste, et le buste se
+  décale de trente degrés en position de tir : personne ne vise face à l'axe
+  de ses épaules.
+- **L'arme** vit dans l'espace du corps, pas dans la main : elle porte la
+  direction de visée, les mains viennent la chercher. Une arme collée à la main
+  ne peut pas viser juste.
+
+Les cinq armes de `WeaponModels.ts` sont les mêmes objets dans les deux vues :
+seule la mise en scène change (bras devant la caméra, ou squelette entier).
+
+`npm run check:human` mesure ce qui doit être vrai — taille, pieds au sol,
+mains sur les prises, canon devant, pas de matrice NaN — puis rend le
+personnage au rasteriseur logiciel (`preview/personnage.png`) pour juger la
+silhouette. 33 contrôles.
 
 ## Assets
 
