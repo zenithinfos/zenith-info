@@ -66,6 +66,7 @@ export default function MinkebeGame() {
   const [joinCode, setJoinCode] = useState("");
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
+  const [showHints, setShowHints] = useState(false);
 
   const sceneRef = useRef<SceneController | null>(null);
   const stateRef = useRef<GameState>(newGame(characterId));
@@ -107,15 +108,19 @@ export default function MinkebeGame() {
       window.clearInterval(timer);
       setLoadingProgress(100);
       setPhase("jeu");
+      setShowHints(true);
       if (voiceOn && voiceAvailable()) {
         const intro = linesFor("intro")[0];
         if (intro) speakLine(intro);
       }
     }, 1500);
 
+    const hideHints = window.setTimeout(() => setShowHints(false), 16000);
+
     return () => {
       window.clearInterval(timer);
       window.clearTimeout(finish);
+      window.clearTimeout(hideHints);
     };
   }, [phase, voiceOn]);
 
@@ -511,6 +516,23 @@ export default function MinkebeGame() {
               </div>
 
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-2 p-3 md:p-4">
+                {showHints && (
+                  <div className="pointer-events-none flex flex-wrap items-center justify-center gap-1.5 rounded-full bg-canopy-950/70 px-3 py-1.5 text-[0.62rem] text-mist/75 backdrop-blur">
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">ZQSD</kbd>
+                    <span>marcher</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Maj</kbd>
+                    <span>courir</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Ctrl</kbd>
+                    <span>s&apos;accroupir</span>
+                    <span className="text-mist/30">·</span>
+                    <span>clic : regarder autour</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Échap</kbd>
+                    <span>pause</span>
+                  </div>
+                )}
                 {ambient && (
                   <p className="max-w-xl rounded-full bg-canopy-950/55 px-4 py-1.5 text-center text-[0.7rem] italic text-mist/70 backdrop-blur">
                     {ambient}

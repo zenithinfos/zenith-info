@@ -54,6 +54,36 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+/**
+ * Hauteur du terrain en un point du monde.
+ *
+ * Utilisée à la fois pour déformer le sol et pour poser les objets dessus
+ * (arbres, fougères, rochers) : sans cela, la végétation flotte ou s'enfonce
+ * dès que le relief ondule. Les plans d'eau creusent une cuvette dont la berge
+ * affleure exactement le niveau de l'eau.
+ */
+function terrainHeight(x: number, z: number): number {
+  const base =
+    Math.sin(x * 0.031) * Math.cos(z * 0.027) * 0.85 +
+    Math.sin((x + z) * 0.011) * 1.15 -
+    0.15;
+
+  let height = base;
+
+  for (const body of WATER_BODIES) {
+    const nx = Math.abs(x - body.center[0]) / (body.width / 2);
+    const nz = Math.abs(z - body.center[1]) / (body.depth / 2);
+    const d = Math.max(nx, nz); // 0 au centre, 1 sur la rive
+    if (d > 1.35) continue;
+
+    const shore = 1 - THREE.MathUtils.smoothstep(d, 1.0, 1.35);
+    const bed = body.level - 1.6 * (1 - Math.min(1, d));
+    height = THREE.MathUtils.lerp(height, bed, shore);
+  }
+
+  return height;
+}
+
 export default function Scene({ onReady, onError, quality = "auto", className = "" }: SceneProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<SceneController | null>(null);
@@ -84,7 +114,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     renderer.setPixelRatio(Math.min(devicePixelRatio || 1, budget.pixelRatio));
     renderer.shadowMap.enabled = SCENE_CONFIG.shadows.enabled && !reduced;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCFSoftShadowMap a été retiré de Three r0.18x.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = SCENE_CONFIG.exposure;
@@ -186,15 +217,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     );
     groundGeometry.rotateX(-Math.PI / 2);
 
-    // Relief léger : quelques ondulations déterministes.
+    // Relief doux : ondulations déterministes, creusées autour des plans d'eau
+    // pour que la surface de l'eau reste visible et que la berge descende.
     const position = groundGeometry.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < position.count; i++) {
-      const x = position.getX(i);
-      const z = position.getZ(i);
-      const height =
-        Math.sin(x * 0.031) * Math.cos(z * 0.027) * 2.4 +
-        Math.sin((x + z) * 0.011) * 3.2;
-      position.setY(i, height - 0.15);
+      position.setY(i, terrainHeight(position.getX(i), position.getZ(i)));
     }
     groundGeometry.computeVertexNormals();
 
@@ -244,7 +271,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
     const dummy = new THREE.Object3D();
     let canopyIndex = 0;
-    const treePositions: [number, number][] = [];
+    let trunkIndex = 0;
 
     for (let i = 0; i < budget.trees; i++) {
       const angle = random() * Math.PI * 2;
@@ -259,26 +286,33 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       );
       if (inWater) continue;
 
+      const ground = terrainHeight(x, z);
       const scale = 0.7 + random() * 1.5;
-      dummy.position.set(x, 0, z);
+      dummy.position.set(x, ground, z);
       dummy.rotation.set(0, random() * Math.PI * 2, 0);
       dummy.scale.set(scale * 0.9, scale, scale * 0.9);
       dummy.updateMatrix();
-      trunks.setMatrixAt(i, dummy.matrix);
-      treePositions.push([x, z]);
+      trunks.setMatrixAt(trunkIndex++, dummy.matrix);
 
       for (let c = 0; c < 2; c++) {
         dummy.position.set(
           x + (random() - 0.5) * 2.4,
-          7.2 * scale + random() * 2.6,
+          ground + 7.2 * scale + random() * 2.6,
           z + (random() - 0.5) * 2.4,
         );
         dummy.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
         dummy.scale.setScalar(scale * (0.7 + random() * 0.55));
         dummy.updateMatrix();
-        if (canopyIndex < canopies.count) canopies.setMatrixAt(canopyIndex++, dummy.matrix);
+        if (canopyIndex < canopies.instanceMatrix.count) {
+          canopies.setMatrixAt(canopyIndex++, dummy.matrix);
+        }
       }
     }
+
+    // Indispensable : les instances non renseignées gardent une matrice
+    // identité et s'empileraient à l'origine (au point de spawn du joueur).
+    trunks.count = trunkIndex;
+    canopies.count = canopyIndex;
     trunks.instanceMatrix.needsUpdate = true;
     canopies.instanceMatrix.needsUpdate = true;
     scene.add(trunks, canopies);
@@ -304,7 +338,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     for (let i = 0; i < fernCount; i++) {
       const angle = random() * Math.PI * 2;
       const distance = 3 + Math.sqrt(random()) * 150;
-      dummy.position.set(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
+      const x = Math.cos(angle) * distance;
+      const z = Math.sin(angle) * distance;
+      dummy.position.set(x, terrainHeight(x, z) - 0.05, z);
       dummy.rotation.set(0, random() * Math.PI * 2, 0);
       dummy.scale.setScalar(0.6 + random() * 1.1);
       dummy.updateMatrix();
@@ -324,7 +360,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     for (let i = 0; i < budget.rocks; i++) {
       const angle = random() * Math.PI * 2;
       const distance = 12 + Math.sqrt(random()) * 190;
-      dummy.position.set(Math.cos(angle) * distance, random() * 0.6, Math.sin(angle) * distance);
+      const x = Math.cos(angle) * distance;
+      const z = Math.sin(angle) * distance;
+      dummy.position.set(x, terrainHeight(x, z) + random() * 0.25, z);
       dummy.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
       dummy.scale.setScalar(0.5 + random() * 1.8);
       dummy.updateMatrix();
@@ -544,9 +582,13 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const bobAmplitude = moving ? (currentMotion === "run" ? 0.075 : 0.035) : 0;
       const sway = moving ? Math.sin(bob * 0.5) * 0.012 : 0;
 
+      // La caméra suit le relief : sans cela, elle s'enfonce dans le sol dès
+      // que le terrain monte (le joueur marcherait « sous » la forêt).
+      const eyeHeight = SCENE_CONFIG.camera.height * 0.8;
+      const groundUnderPlayer = terrainHeight(playerPosition.x, playerPosition.z);
       camera.position.set(
         playerPosition.x + sway,
-        SCENE_CONFIG.camera.height + Math.abs(Math.sin(bob)) * bobAmplitude,
+        groundUnderPlayer + eyeHeight + Math.abs(Math.sin(bob)) * bobAmplitude,
         playerPosition.z,
       );
 
