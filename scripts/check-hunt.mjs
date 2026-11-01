@@ -233,6 +233,45 @@ const cadence = game.fireWeapon("m16", rifle, [bongo], aim, 10, 0, () => 0.5);
 check("Cadence respectée", cadence.report.reason === "cadence");
 
 // ---------------------------------------------------------------------------
+console.log("\nMorphologie");
+// ---------------------------------------------------------------------------
+// Le modèle 3D et la boîte de collision partagent ces formules : on vérifie
+// qu'aucune pièce ne se détache (tête dans le vide, corne flottante, patte
+// qui n'atteint pas le sol).
+for (const [id, b] of Object.entries(game.ANIMAL_BUILDS)) {
+  if (b.kind === "oiseau") continue;
+  const bodyY = game.bodyCenterY(b);
+  const headY = game.headCenterY(b);
+  const headZ = b.length * 0.42 + b.neck * 0.5;
+  const hipY = bodyY - b.girth * 0.32;
+
+  // Le pied tombe sur le sol (hanche → sol = longueur de patte).
+  const footY = hipY - hipY;
+  // Le cou relie le poitrail à la tête : ses deux extrémités doivent être
+  // dans l'un ou l'autre volume.
+  const neckBaseY = bodyY + b.girth * 0.35;
+  const neckBaseZ = b.length * 0.28;
+  const gapNeck = Math.hypot(headY - b.head * 0.18 - neckBaseY, headZ - b.head * 0.12 - neckBaseZ);
+  const gapHead = Math.hypot(
+    headY - (headY - b.head * 0.18),
+    headZ - (headZ - b.head * 0.12),
+  );
+
+  const ok =
+    Math.abs(footY) < 0.001 &&
+    Math.abs(hipY - bodyY) < b.girth &&
+    gapHead < b.head * 0.9 &&
+    gapNeck < b.length * 0.75 + b.neck &&
+    b.shoulder > b.girth * 1.35 &&
+    b.hitRadius <= b.girth * 1.3;
+  check(
+    `${id} : proportions`,
+    ok,
+    `garrot ${b.shoulder} · tronc ±${b.girth} · tête à ${headY.toFixed(2)} m · collision ${b.hitRadius}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nDépeçage");
 // ---------------------------------------------------------------------------
 const carcass = makeAnimal("bongo", 0, -3);

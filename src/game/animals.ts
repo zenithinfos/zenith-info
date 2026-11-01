@@ -76,7 +76,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 620,
     fleeSpeed: 3.4,
     meat: 420,
-    hitRadius: 1.35,
+    hitRadius: 0.85,
     mass: 3200,
   },
   gorille: {
@@ -98,7 +98,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 190,
     fleeSpeed: 2.6,
     meat: 70,
-    hitRadius: 0.72,
+    hitRadius: 0.45,
     mass: 160,
   },
   chimpanze: {
@@ -120,7 +120,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 110,
     fleeSpeed: 4.2,
     meat: 28,
-    hitRadius: 0.45,
+    hitRadius: 0.3,
     mass: 55,
   },
   panthere: {
@@ -142,7 +142,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 130,
     fleeSpeed: 7.2,
     meat: 38,
-    hitRadius: 0.4,
+    hitRadius: 0.27,
     mass: 60,
   },
   bongo: {
@@ -164,7 +164,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 105,
     fleeSpeed: 5.4,
     meat: 95,
-    hitRadius: 0.62,
+    hitRadius: 0.39,
     mass: 220,
   },
   sitatunga: {
@@ -186,7 +186,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 85,
     fleeSpeed: 3.8,
     meat: 62,
-    hitRadius: 0.5,
+    hitRadius: 0.32,
     mass: 90,
   },
   hingebe: {
@@ -208,7 +208,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 42,
     fleeSpeed: 4.8,
     meat: 13,
-    hitRadius: 0.26,
+    hitRadius: 0.16,
     mass: 5,
   },
   crocodile: {
@@ -230,7 +230,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 150,
     fleeSpeed: 2.2,
     meat: 48,
-    hitRadius: 0.42,
+    hitRadius: 0.24,
     mass: 120,
   },
   calao: {
@@ -252,7 +252,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 18,
     fleeSpeed: 6.5,
     meat: 2.5,
-    hitRadius: 0.2,
+    hitRadius: 0.13,
     mass: 1,
   },
   "perroquet-gris": {
@@ -274,7 +274,7 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     health: 10,
     fleeSpeed: 7,
     meat: 1,
-    hitRadius: 0.13,
+    hitRadius: 0.08,
     mass: 0.4,
   },
 };
