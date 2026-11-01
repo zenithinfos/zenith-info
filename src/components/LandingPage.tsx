@@ -186,6 +186,66 @@ export default function LandingPage() {
       </section>
 
       {/* ------------------------------------------------------------------ */}
+      {/* Les Mewas et la survie                                              */}
+      {/* ------------------------------------------------------------------ */}
+      <section id="mewas" className="mx-auto max-w-6xl px-5 py-16">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="eyebrow">{t("mewas.kicker")}</p>
+            <h2 className="display mt-1 text-2xl text-parchment sm:text-3xl">{t("mewas.title")}</h2>
+          </div>
+          <p className="max-w-md text-[0.72rem] leading-relaxed text-mist/55">{t("mewas.lede")}</p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {(
+            [
+              { icon: "🐾", title: "mewas.find.title", desc: "mewas.find.desc" },
+              { icon: "🪡", title: "mewas.weave.title", desc: "mewas.weave.desc" },
+              { icon: "❤", title: "mewas.survive.title", desc: "mewas.survive.desc" },
+            ] as const
+          ).map((card) => (
+            <article key={card.title} className="panel space-y-2 p-5">
+              <span
+                aria-hidden
+                className="grid h-10 w-10 place-items-center rounded-lg border border-sky-300/30 bg-sky-400/10 text-lg"
+              >
+                {card.icon}
+              </span>
+              <h3 className="text-sm font-semibold text-parchment">{t(card.title)}</h3>
+              <p className="text-[0.7rem] leading-relaxed text-mist/60">{t(card.desc)}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {(
+            [
+              { icon: "❤", label: "game.health", note: "gauge.health", colour: "bg-laterite-400" },
+              { icon: "🍈", label: "game.hunger", note: "gauge.hunger", colour: "bg-amber-glow" },
+              { icon: "💧", label: "game.thirst", note: "gauge.thirst", colour: "bg-sky-400" },
+              { icon: "⚡", label: "game.stamina", note: "gauge.stamina", colour: "bg-moss-300" },
+            ] as const
+          ).map((gauge) => (
+            <div key={gauge.label} className="rounded-xl border border-mist/12 bg-canopy-950/50 p-3">
+              <p className="flex items-center gap-1.5 text-[0.62rem] uppercase tracking-[0.16em] text-mist/60">
+                <span aria-hidden>{gauge.icon}</span>
+                {t(gauge.label)}
+              </p>
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-canopy-700">
+                <div className={`h-full w-2/3 rounded-full ${gauge.colour}`} />
+              </div>
+              <p className="mt-1.5 text-[0.64rem] leading-snug text-mist/50">{t(gauge.note)}</p>
+            </div>
+          ))}
+        </div>
+
+        <p className="mt-4 text-[0.66rem] uppercase tracking-[0.22em] text-sky-300/70">
+          {t("mewas.count")}
+        </p>
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
       {/* Installer / soutenir — une seule section, deux colonnes            */}
       {/* ------------------------------------------------------------------ */}
       <section id="soutenir" className="mx-auto max-w-6xl px-5 py-16">

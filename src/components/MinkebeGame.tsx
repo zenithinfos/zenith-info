@@ -6,17 +6,27 @@ import CompassBar, { type Waypoint } from "./CompassBar";
 import GpsMap, { type MapMarker } from "./GpsMap";
 import TouchControls, { type TouchVector } from "./TouchControls";
 import LoadingScreen from "./LoadingScreen";
+import Dressing from "./Dressing";
 import {
   type GameState,
   type HuntState,
   type InputState,
   deserialize,
+  drinkWater,
+  eatFruit,
+  grillMeat,
   initialHunt,
   newGame,
+  restartExpedition,
   serialize,
   step,
+  atCamp,
+  waterWithin,
   weatherLabel,
+  weaveOutfit,
 } from "@/game/engine";
+import { MEWA_COUNT, mewasFound, wildMewas } from "@/game/mewas";
+import { outfitAvailable, getOutfit } from "@/game/outfits";
 import { LEVELS, levelStatus } from "@/game/progression";
 import { CHARACTERS, getCharacter } from "@/game/characters";
 import { useI18n } from "@/i18n/LocaleProvider";
@@ -45,7 +55,17 @@ import { speakLine, linesFor, voiceAvailable } from "@/game/voice";
 import { ambientLine } from "@/game/whimsy";
 import { formatPrice, PLANS } from "@/lib/plans";
 
-type Phase = "accueil" | "chargement" | "jeu" | "pause";
+type Phase = "accueil" | "chargement" | "jeu" | "pause" | "fin";
+
+interface BoardRow {
+  id: string;
+  name: string;
+  score: number;
+  cause: "soif" | "faim" | "blessure";
+  mewas: number;
+  level: number;
+  seconds: number;
+}
 
 interface Toast {
   id: number;
@@ -89,6 +109,10 @@ export default function MinkebeGame() {
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
   const [showHints, setShowHints] = useState(false);
+  const [showDressing, setShowDressing] = useState(false);
+  const [board, setBoard] = useState<BoardRow[]>([]);
+  const [boardRank, setBoardRank] = useState(0);
+  const [boardState, setBoardState] = useState<"idle" | "envoi" | "ok" | "hors-ligne">("idle");
 
   const sceneRef = useRef<SceneController | null>(null);
   const stateRef = useRef<GameState>(newGame(characterId));
@@ -116,6 +140,7 @@ export default function MinkebeGame() {
   const [hitMarker, setHitMarker] = useState<"none" | "hit" | "kill">("none");
   const [targetLabel, setTargetLabel] = useState<string | null>(null);
   const [carcassNear, setCarcassNear] = useState<string | null>(null);
+  const carcassNearRef = useRef<string | null>(null);
 
   const pushToast = useCallback((toast: Omit<Toast, "id">) => {
     const id = Date.now() + Math.random();
@@ -245,6 +270,7 @@ export default function MinkebeGame() {
     const result = harvest(carcass);
     if (!result) return;
     commitHunt({ ...huntRef.current, meat: huntRef.current.meat + result.meat });
+    carcassNearRef.current = null;
     setCarcassNear(null);
     pushToast({
       title: `Dépeçage · +${result.meat} kg`,
@@ -252,6 +278,150 @@ export default function MinkebeGame() {
       tone: "succes",
     });
   }, [commitHunt, pushToast]);
+
+  // ------------------------------------------------------------------
+  // Survie : boire, manger, griller, tisser
+  // ------------------------------------------------------------------
+  const drink = useCallback(() => {
+    const result = drinkWater(stateRef.current);
+    stateRef.current = result.state;
+    setHud(result.state);
+    if (result.code === "drink.ok") {
+      pushToast({
+        title: t("game.drinkOk"),
+        detail: `💧 ${Math.round(result.state.vitals.hydration)} / 100`,
+        tone: "succes",
+      });
+    } else {
+      pushToast({ title: t("game.drinkNone"), tone: "alerte" });
+    }
+  }, [pushToast, t]);
+
+  const eat = useCallback(() => {
+    const result = eatFruit(stateRef.current);
+    stateRef.current = result.state;
+    setHud(result.state);
+    if (result.code === "eat.ok") {
+      pushToast({
+        title: t("game.eatOk"),
+        detail: `🍈 ${result.state.fruits} ${t("game.fruits")} · 🍽 ${Math.round(result.state.vitals.hunger)} / 100`,
+        tone: "succes",
+      });
+    } else {
+      pushToast({ title: t("game.eatNone"), tone: "alerte" });
+    }
+  }, [pushToast, t]);
+
+  const grill = useCallback(() => {
+    const result = grillMeat(stateRef.current);
+    stateRef.current = result.state;
+    setHud(result.state);
+    if (result.code === "grill.ok") {
+      pushToast({
+        title: t("game.grillOk"),
+        detail: `🔥 ${Math.round(result.state.hunt.meat)} kg · 🍽 ${Math.round(result.state.vitals.hunger)} / 100`,
+        tone: "succes",
+      });
+    } else if (result.code === "grill.far") {
+      pushToast({ title: t("game.grillFar"), tone: "info" });
+    } else {
+      pushToast({ title: t("game.grillNone"), tone: "alerte" });
+    }
+  }, [pushToast, t]);
+
+  const weave = useCallback(
+    (outfitId: string) => {
+      const result = weaveOutfit(stateRef.current, outfitId);
+      stateRef.current = result.state;
+      setHud(result.state);
+      const outfit = getOutfit(outfitId);
+      if (result.code === "weave.ok") {
+        pushToast({
+          title: `${outfit.emoji} ${outfit.name}`,
+          detail: `🪡 ${outfit.threads} 🧵 · ${result.state.threads} 🧵 ${t("game.dressHave")}`,
+          tone: "succes",
+        });
+      } else if (result.code === "weave.threads") {
+        pushToast({
+          title: `${outfit.threads} 🧵 ${t("game.dressNeed")}`,
+          detail: `${result.state.threads} 🧵 ${t("game.dressHave")}`,
+          tone: "alerte",
+        });
+      }
+    },
+    [pushToast, t],
+  );
+
+  const wear = useCallback(
+    (selection: { characterId: string; outfitId: string }) => {
+      const outfit = getOutfit(selection.outfitId);
+      const state = stateRef.current;
+      if (!outfitAvailable(outfit, state.level, state.woven)) {
+        pushToast({
+          title: `${outfit.threads} 🧵 ${t("game.dressNeed")}`,
+          detail: t("game.dressNone"),
+          tone: "alerte",
+        });
+        return;
+      }
+      const next: GameState = {
+        ...state,
+        player: { ...state.player, characterId: selection.characterId, outfit: outfit.id },
+      };
+      stateRef.current = next;
+      setCharacterId(selection.characterId);
+      setHud(next);
+      sceneRef.current?.setPlayer(next.player.position, next.player.heading, next.player.motion);
+      pushToast({ title: `${outfit.emoji} ${outfit.name}`, tone: "info" });
+    },
+    [pushToast, t],
+  );
+
+  // Expédition terminée : le score part au classement.
+  const submitDeath = useCallback(async (state: GameState) => {
+    if (!state.death) return;
+    setBoardState("envoi");
+    try {
+      const response = await fetch("/api/leaderboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: getDeviceId(),
+          name: getCharacter(state.player.characterId as "michelle").name,
+          score: state.death.score,
+          cause: state.death.cause,
+          mewas: mewasFound(state.mewas),
+          level: state.level,
+          seconds: Math.round(state.elapsed),
+        }),
+      });
+      if (!response.ok) throw new Error("refus");
+      const data = (await response.json()) as { entries?: BoardRow[]; rank?: number };
+      setBoard(data.entries ?? []);
+      setBoardRank(data.rank ?? 0);
+      setBoardState("ok");
+    } catch {
+      setBoardState("hors-ligne");
+      try {
+        const response = await fetch("/api/leaderboard", { cache: "no-store" });
+        const data = (await response.json()) as { entries?: BoardRow[] };
+        setBoard(data.entries ?? []);
+      } catch {
+        /* le classement reste vide : la fin d'expédition s'affiche quand même */
+      }
+    }
+  }, []);
+
+  const restart = useCallback(() => {
+    stateRef.current = restartExpedition(stateRef.current, characterId);
+    huntRef.current = stateRef.current.hunt;
+    animalsRef.current = [];
+    setHud(stateRef.current);
+    setBoardState("idle");
+    setBoardRank(0);
+    setLoadingProgress(0);
+    setPhase("chargement");
+  }, [characterId]);
 
   /** Point de vue : à l'épaule par défaut, le personnage doit exister. */
   const [view, setView] = useState<SceneView>("troisieme");
@@ -265,10 +435,22 @@ export default function MinkebeGame() {
     },
     reload: () => {},
     skin: () => {},
+    drink: () => {},
+    eat: () => {},
+    grill: () => {},
+    dress: () => {},
   });
   useEffect(() => {
-    actionsRef.current = { equip, reload, skin: skinCarcass };
-  }, [equip, reload, skinCarcass]);
+    actionsRef.current = {
+      equip,
+      reload,
+      skin: skinCarcass,
+      drink,
+      eat,
+      grill,
+      dress: () => setShowDressing((value) => !value),
+    };
+  }, [equip, reload, skinCarcass, drink, eat, grill]);
 
   // Tir automatique : on maintient la gâchette, la cadence est gérée par l'arme.
   useEffect(() => {
@@ -334,6 +516,25 @@ export default function MinkebeGame() {
           weather: result.state.weather.current,
           intensity: result.state.weather.intensity,
         });
+      }
+
+      // Mewas : le rendu reçoit l'instantané des esprits.
+      if (controller) controller.setMewas(result.state.mewas);
+
+      for (const reward of result.mewas) {
+        pushToast({
+          title: `🐾 ${t("game.mewaFound")}`,
+          detail: `+${reward.threads} 🧵 · +${reward.xp} ${t("game.xp")} · +${reward.style} ${t("game.style")} — ${mewasFound(result.state.mewas)}/${MEWA_COUNT}`,
+          tone: "succes",
+        });
+      }
+
+      if (result.death) {
+        runningRef.current = false;
+        setHud(result.state);
+        setPhase("fin");
+        void submitDeath(result.state);
+        return;
       }
 
       // Faune : la harde vit autour du joueur, que le rendu soit prêt ou non.
@@ -425,7 +626,8 @@ export default function MinkebeGame() {
             3.6,
           );
           const carcassSpecies = carcass ? getSpecies(carcass.speciesId) : null;
-          setCarcassNear(carcassSpecies ? carcassSpecies.name : null);
+          carcassNearRef.current = carcassSpecies ? carcassSpecies.name : null;
+          setCarcassNear(carcassNearRef.current);
         }
       }
       if (nowMs - lastAmbientRef.current > 14000) {
@@ -436,7 +638,7 @@ export default function MinkebeGame() {
 
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [phase, pushToast, t]);
+  }, [phase, pushToast, t, submitDeath]);
 
   // ------------------------------------------------------------------
   // Clavier
@@ -471,7 +673,19 @@ export default function MinkebeGame() {
         if (weapon) actionsRef.current.equip(weapon.id);
       }
       if (event.code === "KeyR") actionsRef.current.reload();
-      if (event.code === "KeyE") actionsRef.current.skin();
+      // E est contextuel : dépecer si une carcasse est là, boire sinon.
+      if (event.code === "KeyE") {
+        if (carcassNearRef.current) actionsRef.current.skin();
+        else actionsRef.current.drink();
+      }
+      if (event.code === "KeyF") actionsRef.current.eat();
+      if (event.code === "KeyG") actionsRef.current.grill();
+      // ⇧O ouvre le vestiaire ; Maj seule reste la course.
+      if (event.code === "KeyO" && event.shiftKey) {
+        event.preventDefault();
+        document.exitPointerLock?.();
+        actionsRef.current.dress();
+      }
       if (event.code === "Space") {
         firingRef.current = true;
         fireRef.current();
@@ -480,7 +694,7 @@ export default function MinkebeGame() {
       if (event.code === "Escape") {
         setPhase((current) => (current === "jeu" ? "pause" : current === "pause" ? "jeu" : current));
       }
-      if (event.code === "KeyF" && document.pointerLockElement === null) {
+      if (event.code === "KeyP" && document.pointerLockElement === null) {
         sceneRef.current?.requestLook();
       }
       if (event.code === "KeyV") {
@@ -584,14 +798,22 @@ export default function MinkebeGame() {
       };
       const first = data.saves?.[0];
       if (first) {
-        stateRef.current = deserialize(first.state);
-        pushToast({ title: "Expédition restaurée", tone: "info" });
+        const restored = deserialize(first.state);
+        // Une expédition sauvée morte ne se reprend pas : on repart, en
+        // gardant les tenues tissées.
+        stateRef.current = restored.death ? restartExpedition(restored) : restored;
+        pushToast({
+          title: restored.death ? "Nouvelle expédition" : "Expédition restaurée",
+          detail: restored.death ? "La précédente s'est terminée sans vous." : undefined,
+          tone: "info",
+        });
         return true;
       }
     } catch {
       const local = window.localStorage.getItem("minkebe.save");
       if (local) {
-        stateRef.current = deserialize(JSON.parse(local) as Record<string, unknown>);
+        const restored = deserialize(JSON.parse(local) as Record<string, unknown>);
+        stateRef.current = restored.death ? restartExpedition(restored) : restored;
         return true;
       }
     }
@@ -701,6 +923,7 @@ export default function MinkebeGame() {
   const heldWeapon = getWeapon(arsenal.current);
   const heldAmmo = weaponStateOf(arsenal, heldWeapon.id);
   const totalKills = Object.values(hud?.hunt.kills ?? {}).reduce((sum, n) => sum + n, 0);
+  const nearWater = hud ? waterWithin(hud.player.position[0], hud.player.position[2]) : false;
 
   const waypoints: Waypoint[] = useMemo(() => {
     if (!hud) return [];
@@ -737,6 +960,13 @@ export default function MinkebeGame() {
         position: player.position,
         kind: "équipe" as const,
       })),
+      // Les Mewas non ramassés sont sur le GPS : c'est la chasse au trésor.
+      ...wildMewas(hud.mewas).map((mewa) => ({
+        id: `mewa-${mewa.id}`,
+        label: "Mewa",
+        position: [mewa.x, 1, mewa.z] as [number, number, number],
+        kind: "mewa" as const,
+      })),
     ];
   }, [hud, remotePlayers]);
 
@@ -752,6 +982,7 @@ export default function MinkebeGame() {
               sceneRef.current = controller;
               controller.setWeapon(huntRef.current.arsenal.current);
               controller.setAnimals(animalsRef.current);
+              controller.setMewas(stateRef.current.mewas);
               controller.setView(view);
             }}
             onError={(message) =>
@@ -774,7 +1005,7 @@ export default function MinkebeGame() {
                       {weatherLabel(hud.weather.current)} · {Math.round(hud.vitals.temperature)} °C
                     </p>
                   </div>
-                  <Vitals vitals={hud.vitals} />
+                  <Vitals vitals={hud.vitals} label={(key) => t(key)} />
                   <Objectives state={hud} label={(key) => t(key)} />
                 </div>
 
@@ -786,6 +1017,15 @@ export default function MinkebeGame() {
                     </p>
                     <p className="text-[0.65rem] text-mist/60">
                       {hud.score} pts · niveau {hud.level}
+                    </p>
+                  </div>
+                  <div className="panel-tight px-3 py-2 text-right">
+                    <p className="eyebrow">{t("game.mewas")}</p>
+                    <p className="text-sm font-semibold tabular-nums text-sky-300">
+                      🐾 {mewasFound(hud.mewas)}/{MEWA_COUNT}
+                    </p>
+                    <p className="text-[0.65rem] text-mist/60">
+                      🧵 {hud.threads} · {hud.style} {t("game.style")}
                     </p>
                   </div>
                   <div className="panel-tight px-3 py-2 text-right">
@@ -897,6 +1137,18 @@ export default function MinkebeGame() {
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">R</kbd>
                     <span>{t("game.hints.reload")}</span>
                     <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">F</kbd>
+                    <span>{t("game.hints.eat")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">E</kbd>
+                    <span>{t("game.hints.drink")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">G</kbd>
+                    <span>{t("game.hints.grill")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">⇧O</kbd>
+                    <span>{t("game.hints.dress")}</span>
+                    <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">V</kbd>
                     <span>{t("game.hints.view")}</span>
                     <span className="text-mist/30">·</span>
@@ -910,6 +1162,32 @@ export default function MinkebeGame() {
                   </p>
                 )}
                 <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+                  {nearWater && (
+                    <button type="button" className="btn btn-primary !px-3 !py-1.5 !text-xs" onClick={drink}>
+                      💧 {t("game.drink")} <kbd className="opacity-60">E</kbd>
+                    </button>
+                  )}
+                  {hud.fruits > 0 && (
+                    <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={eat}>
+                      🍈 {t("game.eat")} · {hud.fruits} <kbd className="opacity-50">F</kbd>
+                    </button>
+                  )}
+                  {atCamp(hud) && hud.hunt.meat >= 1 && (
+                    <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={grill}>
+                      🔥 {t("game.grill")} <kbd className="opacity-50">G</kbd>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost !px-3 !py-1.5 !text-xs"
+                    onClick={() => {
+                      document.exitPointerLock?.();
+                      setShowDressing(true);
+                    }}
+                  >
+                    🪡 {t("game.dress")} · 🧵 {hud.threads}{" "}
+                    <kbd className="opacity-50">⇧O</kbd>
+                  </button>
                   <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => setShowMap((v) => !v)}>
                     🗺️ {t("game.map")} <kbd className="opacity-50">M</kbd>
                   </button>
@@ -945,7 +1223,9 @@ export default function MinkebeGame() {
                   if (action === "carte") setShowMap((v) => !v);
                   if (action === "courir") inputRef.current.run = !inputRef.current.run;
                   if (action === "interagir") {
-                    pushToast({ title: "Observation", detail: "Restez immobile pour laisser venir la faune.", tone: "info" });
+                    const [x, , z] = stateRef.current.player.position;
+                    if (waterWithin(x, z)) drink();
+                    else eat();
                   }
                 }}
               />
@@ -994,6 +1274,146 @@ export default function MinkebeGame() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Vestiaire (⇧O) : les tenues tissées avec les Fils de Rêve */}
+          {showDressing && hud && (
+            <div className="absolute inset-0 z-30 overflow-y-auto bg-canopy-950/92 p-3 backdrop-blur md:p-6">
+              <div className="mx-auto max-w-3xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="eyebrow">
+                    {t("game.dressOpen")} · 🧵 {hud.threads}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-ghost !px-3 !py-1.5 !text-xs"
+                    onClick={() => setShowDressing(false)}
+                  >
+                    ✕ {t("game.pause")}
+                  </button>
+                </div>
+                <Dressing
+                  level={hud.level}
+                  threads={hud.threads}
+                  woven={hud.woven}
+                  characterId={hud.player.characterId}
+                  outfitId={hud.player.outfit}
+                  onChange={wear}
+                  onWeave={weave}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Fin d'expédition : la mort, la cause, le score au classement */}
+          {phase === "fin" && hud?.death && (
+            <div className="absolute inset-0 z-40 overflow-y-auto bg-canopy-950/94 p-3 backdrop-blur md:p-6">
+              <div className="mx-auto w-full max-w-2xl space-y-4 py-6">
+                <div className="panel space-y-3 p-6">
+                  <p className="eyebrow">{t("game.deathTitle")}</p>
+                  <h3 className="display text-3xl leading-tight text-laterite-400">
+                    {t(
+                      (hud.death.cause === "soif"
+                        ? "game.deathSoif"
+                        : hud.death.cause === "faim"
+                          ? "game.deathFaim"
+                          : "game.deathBlessure") as DictionaryKey,
+                    )}
+                  </h3>
+                  <p className="text-sm leading-relaxed text-mist/70">
+                    {t(
+                      (hud.death.cause === "soif"
+                        ? "game.deathSoifNote"
+                        : hud.death.cause === "faim"
+                          ? "game.deathFaimNote"
+                          : "game.deathBlessureNote") as DictionaryKey,
+                    )}
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {[
+                      { label: t("game.deathScore"), value: `${hud.death.score}` },
+                      { label: t("game.deathRank"), value: boardRank ? `#${boardRank}` : "—" },
+                      { label: t("game.mewas"), value: `${mewasFound(hud.mewas)}/${MEWA_COUNT}` },
+                      {
+                        label: t("game.survived"),
+                        value: `${Math.floor(hud.elapsed / 60)} min ${Math.floor(hud.elapsed % 60)} ${t("game.seconds")}`,
+                      },
+                    ].map((stat) => (
+                      <div
+                        key={stat.label}
+                        className="rounded-xl border border-mist/12 bg-canopy-900/60 px-3 py-2"
+                      >
+                        <p className="text-[0.55rem] uppercase tracking-wider text-mist/50">
+                          {stat.label}
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums text-parchment">
+                          {stat.value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className="btn btn-primary" onClick={restart}>
+                      ▶ {t("game.deathRestart")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setPhase("accueil");
+                        setShowDressing(false);
+                      }}
+                    >
+                      ⌂ {t("game.pause")}
+                    </button>
+                    {boardState === "envoi" && (
+                      <span className="text-[0.65rem] text-mist/50">…</span>
+                    )}
+                    {boardState === "hors-ligne" && (
+                      <span className="text-[0.65rem] text-laterite-400">
+                        Classement indisponible
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="panel space-y-2 p-4">
+                  <p className="eyebrow">{t("game.leaderboard")}</p>
+                  {board.length === 0 ? (
+                    <p className="text-xs text-mist/55">{t("game.leaderboardEmpty")}</p>
+                  ) : (
+                    <ol className="space-y-1">
+                      {board.map((row, index) => (
+                        <li
+                          key={row.id}
+                          className="flex items-baseline justify-between gap-2 rounded-lg px-2 py-1 text-xs odd:bg-canopy-900/40"
+                        >
+                          <span className="w-6 shrink-0 text-mist/45 tabular-nums">
+                            {index + 1}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-parchment/85">
+                            {row.name}
+                            {row.score === hud.death?.score && index + 1 === boardRank && (
+                              <span className="ml-1 text-[0.6rem] text-sky-300">
+                                ({t("game.leaderboardYou")})
+                              </span>
+                            )}
+                          </span>
+                          <span className="shrink-0 text-mist/50">
+                            🐾 {row.mewas} · {Math.floor(row.seconds / 60)} min
+                          </span>
+                          <span className="w-14 shrink-0 text-right font-semibold tabular-nums text-amber-glow">
+                            {row.score}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Accueil */}
@@ -1245,28 +1665,55 @@ function Objectives({ state, label }: { state: GameState; label: (key: Dictionar
   );
 }
 
-function Vitals({ vitals }: { vitals: GameState["vitals"] }) {
+/**
+ * Les quatre jauges de survie.
+ *
+ * Elles sont toujours à l'écran : c'est le mode de jeu, pas un panneau
+ * optionnel. Sous 20 %, la barre clignote doucement — assez pour alerter,
+ * jamais assez pour distraire de la forêt.
+ */
+function Vitals({
+  vitals,
+  label,
+}: {
+  vitals: GameState["vitals"];
+  label: (key: DictionaryKey) => string;
+}) {
   const bars = [
-    { label: "Endurance", value: vitals.stamina, colour: "bg-moss-300" },
-    { label: "Eau", value: vitals.hydration, colour: "bg-sky-400" },
-    { label: "Santé", value: vitals.health, colour: "bg-laterite-400" },
-  ];
+    { icon: "❤", key: "game.health", value: vitals.health, colour: "bg-laterite-400" },
+    { icon: "🍈", key: "game.hunger", value: vitals.hunger, colour: "bg-amber-glow" },
+    { icon: "💧", key: "game.thirst", value: vitals.hydration, colour: "bg-sky-400" },
+    { icon: "⚡", key: "game.stamina", value: vitals.stamina, colour: "bg-moss-300" },
+  ] as const;
   return (
-    <div className="panel-tight w-40 space-y-1.5 px-3 py-2">
-      {bars.map((bar) => (
-        <div key={bar.label}>
-          <div className="flex justify-between text-[0.58rem] uppercase tracking-wider text-mist/55">
-            <span>{bar.label}</span>
-            <span className="tabular-nums">{Math.round(bar.value)}</span>
+    <div className="panel-tight w-44 space-y-1.5 px-3 py-2">
+      {bars.map((bar) => {
+        const value = Math.max(0, Math.min(100, bar.value));
+        const low = value < 20;
+        return (
+          <div key={bar.key}>
+            <div className="flex justify-between text-[0.58rem] uppercase tracking-wider text-mist/55">
+              <span>
+                <span aria-hidden className="mr-1">
+                  {bar.icon}
+                </span>
+                {label(bar.key as DictionaryKey)}
+              </span>
+              <span className={`tabular-nums ${low ? "text-laterite-400" : ""}`}>
+                {Math.round(value)}
+              </span>
+            </div>
+            <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-canopy-700">
+              <div
+                className={`h-full rounded-full ${bar.colour} transition-[width] duration-300 ${
+                  low ? "animate-pulse" : ""
+                }`}
+                style={{ width: `${value}%` }}
+              />
+            </div>
           </div>
-          <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-canopy-700">
-            <div
-              className={`h-full rounded-full ${bar.colour} transition-[width] duration-300`}
-              style={{ width: `${Math.max(0, Math.min(100, bar.value))}%` }}
-            />
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

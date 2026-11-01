@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { CHARACTERS } from "@/game/characters";
-import { OUTFITS, canWear, getOutfit, unlockedOutfits } from "@/game/outfits";
+import { OUTFITS, canWeave, getOutfit, outfitAvailable } from "@/game/outfits";
 import { characterCopy, outfitCopy } from "@/i18n/catalogue";
 import { useI18n } from "@/i18n/LocaleProvider";
 
@@ -20,20 +20,31 @@ const BASE = {
 
 export default function Dressing({
   level = 1,
+  threads = 0,
+  woven = [],
   characterId = "michelle",
   outfitId = "explorateur",
   onChange,
+  onWeave,
 }: {
   level?: number;
+  /** Fils de Rêve en réserve. */
+  threads?: number;
+  /** Tenues déjà tissées. */
+  woven?: string[];
   characterId?: string;
   outfitId?: string;
   onChange?: (selection: { characterId: string; outfitId: string }) => void;
+  onWeave?: (outfitId: string) => void;
 }) {
   const { locale, t } = useI18n();
   const [character, setCharacter] = useState(characterId);
   const [outfit, setOutfit] = useState(outfitId);
 
-  const available = useMemo(() => unlockedOutfits(level), [level]);
+  const available = useMemo(
+    () => OUTFITS.filter((entry) => outfitAvailable(entry, level, woven)),
+    [level, woven],
+  );
   const current = outfitCopy(getOutfit(outfit), locale);
 
   const stats = useMemo(
@@ -61,9 +72,12 @@ export default function Dressing({
             {t("dressing.title")}
           </h2>
         </div>
-        <span className="chip">
-          {t("dressing.level")} {level}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="chip">🧵 {threads}</span>
+          <span className="chip">
+            {t("dressing.level")} {level}
+          </span>
+        </div>
       </header>
 
       <div className="flex flex-wrap gap-2">
@@ -93,41 +107,70 @@ export default function Dressing({
         <div className="space-y-2">
           {OUTFITS.map((base) => {
             const item = outfitCopy(base, locale);
-            const unlocked = canWear(item.id, level);
+            const unlocked = outfitAvailable(item, level, woven);
+            const weavable = canWeave(item, threads, woven);
+            const magic = item.threads > 0;
+            const wovenAlready = woven.includes(item.id);
             return (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                disabled={!unlocked}
-                onClick={() => select(character, item.id)}
-                className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                className={`rounded-xl border transition ${
                   outfit === item.id
                     ? "border-moss-300/70 bg-moss-400/10"
                     : "border-mist/12 hover:border-moss-300/40"
                 }`}
-                aria-pressed={outfit === item.id}
               >
-                <span
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-lg"
-                  style={{ backgroundColor: `${item.accent}22`, border: `1px solid ${item.accent}55` }}
+                <button
+                  type="button"
+                  disabled={!unlocked}
+                  onClick={() => select(character, item.id)}
+                  className="flex w-full items-center gap-3 px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-pressed={outfit === item.id}
                 >
-                  {item.emoji}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm text-parchment">{item.name}</span>
-                  <span className="block truncate text-[0.65rem] text-mist/55">
-                    {unlocked
-                      ? item.description
-                      : `${t("dressing.locked")} ${item.unlockLevel}`}
+                  <span
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-lg"
+                    style={{ backgroundColor: `${item.accent}22`, border: `1px solid ${item.accent}55` }}
+                  >
+                    {item.emoji}
                   </span>
-                </span>
-              </button>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-parchment">{item.name}</span>
+                    <span className="block truncate text-[0.65rem] text-mist/55">
+                      {unlocked
+                        ? item.description
+                        : magic
+                          ? `${item.threads} 🧵 · ${t("game.dressNeed")}`
+                          : `${t("dressing.locked")} ${item.unlockLevel}`}
+                    </span>
+                  </span>
+                  {magic && (
+                    <span className="shrink-0 text-[0.6rem] tabular-nums text-sky-300">
+                      {wovenAlready ? `✓ ${t("game.dressWoven")}` : `${item.threads} 🧵`}
+                    </span>
+                  )}
+                </button>
+                {magic && !wovenAlready && (
+                  <div className="border-t border-mist/10 px-3 py-1.5">
+                    <button
+                      type="button"
+                      disabled={!weavable}
+                      onClick={() => onWeave?.(item.id)}
+                      className="text-[0.62rem] font-semibold uppercase tracking-wider text-sky-300 transition disabled:cursor-not-allowed disabled:text-mist/35"
+                    >
+                      🪡 {t("game.dressThreads")} · {item.threads} 🧵
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
           {available.length < OUTFITS.length && (
             <p className="text-[0.65rem] text-mist/45">
               {OUTFITS.length - available.length} {t("dressing.lockedNote")}
             </p>
+          )}
+          {woven.length === 0 && (
+            <p className="text-[0.65rem] text-sky-300/70">🐾 {t("game.dressNone")}</p>
           )}
         </div>
 

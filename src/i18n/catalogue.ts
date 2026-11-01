@@ -95,6 +95,21 @@ const OUTFITS_EN: Record<string, OutfitCopy> = {
     name: "Night suit",
     description: "Matte anti-glare cloth, invisible seams. Watch without being seen.",
   },
+  reve: {
+    name: "Dream outfit",
+    description:
+      "Woven from Mewa Dream Threads. The cloth catches the forest's blue light and gives it back a step later.",
+  },
+  lumiere: {
+    name: "Mantle of light",
+    description:
+      "Enough threads to cover the shoulders. Rain slides off, the night brightens around you.",
+  },
+  "peau-mewa": {
+    name: "Mewa pelt",
+    description:
+      "Twenty-four threads, the price of a whole pack of spirits. No one hears you coming.",
+  },
 };
 
 const CHARACTERS_EN: Record<string, CharacterCopy> = {

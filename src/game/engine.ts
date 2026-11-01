@@ -24,6 +24,8 @@ import {
   worldClock,
 } from "./realism";
 import { initialArsenalState, type ArsenalState } from "./hunting";
+import { type MewaReward, type MewaState, mewasFound, spawnMewas, stepMewas } from "./mewas";
+import { waterDepthAt } from "./water";
 import {
   advanceProgress,
   initialProgress,
@@ -54,6 +56,14 @@ export interface HuntState {
   shots: number;
 }
 
+/** Fin d'expédition : on ne se relève pas d'une déshydratation. */
+export interface DeathState {
+  cause: "soif" | "faim" | "blessure";
+  at: number;
+  /** Score final, figé au moment de la mort. */
+  score: number;
+}
+
 export interface GameState {
   version: number;
   seed: number;
@@ -67,6 +77,21 @@ export interface GameState {
   gadgets: GadgetState[];
   /** Expédition en cours : objectifs, zones ouvertes. Sérialisé. */
   progress: ProgressState;
+  /** Les dix esprits de la forêt. */
+  mewas: MewaState[];
+  /** Fils de Rêve : la monnaie des tenues tissées. */
+  threads: number;
+  /** Expérience et points de style gagnés en explorant. */
+  xp: number;
+  style: number;
+  /** Fruits cueillis en marchant. */
+  fruits: number;
+  /** Avancement de la cueillette en cours (0-1). */
+  forage: number;
+  /** Tenues tissées avec des Fils de Rêve. */
+  woven: string[];
+  /** Non nul quand l'expédition est terminée. */
+  death: DeathState | null;
   level: number;
   score: number;
   settings: RealismSettings;
@@ -84,7 +109,7 @@ export interface InputState {
   joystick?: { x: number; y: number } | null;
 }
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 export function initialHunt(): HuntState {
   return { arsenal: initialArsenalState(), meat: 0, kills: {}, shots: 0 };
@@ -110,11 +135,29 @@ export function newGame(characterId = "michelle"): GameState {
     observedSpecies: [],
     gadgets: initialGadgets([]),
     progress: initialProgress(),
+    mewas: spawnMewas(Math.floor(Math.random() * 2 ** 31), DEFAULT_START.position),
+    threads: 0,
+    xp: 0,
+    style: 0,
+    fruits: 2,
+    forage: 0,
+    woven: [],
+    death: null,
     level: 1,
     score: 0,
     settings: DEFAULT_REALISM,
     hunt: initialHunt(),
   };
+}
+
+/**
+ * Est-on au camp ? Pas « dans la zone camp » : `zoneAt` retombe sur le camp
+ * quand on est entre deux zones, ce qui rendrait tout le hors-piste « abrité ».
+ * Le camp, c'est le cercle de tentes autour du point de départ.
+ */
+export function atCamp(state: GameState, radius = 22): boolean {
+  const [x, , z] = state.player.position;
+  return Math.hypot(x - DEFAULT_START.position[0], z - DEFAULT_START.position[2]) < radius;
 }
 
 /** Vitesse effective : personnage × tenue × état (nage, discrétion). */
@@ -138,10 +181,50 @@ export interface StepResult {
   warnings: string[];
   /** Niveau qui vient d'être terminé à ce pas de temps, s'il y en a un. */
   completedLevel: ExpeditionLevel | null;
+  /** Mewas ramassés pendant ce pas de temps. */
+  mewas: MewaReward[];
+  /** Fin d'expédition déclenchée pendant ce pas de temps. */
+  death: DeathState | null;
 }
 
 /** Fait avancer le monde d'un pas de temps (dt en secondes). */
 export function step(state: GameState, input: InputState, dt: number): StepResult {
+  // Expédition terminée : le monde s'arrête. On ne simule pas un cadavre.
+  if (state.death) {
+    return {
+      state,
+      zone: zoneAt(state.player.position[0], state.player.position[2]),
+      enteredZone: false,
+      observations: [],
+      warnings: [],
+      completedLevel: null,
+      mewas: [],
+      death: null,
+    };
+  }
+
+  // La santé peut avoir été vidée par une charge entre deux pas : le combat
+  // se joue dans le rendu, la mort se constate ici.
+  if (state.vitals.health <= 0) {
+    const cause: DeathState["cause"] =
+      state.vitals.hydration < 15 ? "soif" : state.vitals.hunger < 12 ? "faim" : "blessure";
+    const dead: GameState = {
+      ...state,
+      vitals: { ...state.vitals, health: 0 },
+      death: { cause, at: state.elapsed, score: state.score },
+    };
+    return {
+      state: dead,
+      zone: zoneAt(dead.player.position[0], dead.player.position[2]),
+      enteredZone: false,
+      observations: [],
+      warnings: [],
+      completedLevel: null,
+      mewas: [],
+      death: dead.death,
+    };
+  }
+
   const next: GameState = {
     ...state,
     elapsed: state.elapsed + dt,
@@ -191,7 +274,7 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
   next.weather = nextWeather(next.weather, dt, next.seed);
   next.vitals = tickVitals(next.vitals, {
     running: next.player.motion === "run",
-    sheltered: next.zoneId === "camp",
+    sheltered: atCamp(next),
     wetness: next.vitals.wetness,
     weather: next.weather,
     hour: clock.hour,
@@ -221,7 +304,31 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     }
   }
 
-  next.score = faunaScore(next.observedSpecies);
+  // --- Mewas : les esprits vivent même quand le joueur regarde ailleurs.
+  const mewaStep = stepMewas(
+    next.mewas,
+    { x: next.player.position[0], z: next.player.position[2] },
+    dt,
+    next.elapsed,
+  );
+  next.mewas = mewaStep.mewas;
+  for (const reward of mewaStep.collected) {
+    next.threads += reward.threads;
+    next.xp += reward.xp;
+    next.style += reward.style;
+  }
+  if (mewaStep.collected.length) next.mewas = [...next.mewas];
+
+  // --- Cueillette : les fruits se ramassent en marchant.
+  if (next.player.motion !== "idle" && !atCamp(next) && next.fruits < 8) {
+    next.forage = Math.min(1, next.forage + dt / 16);
+    if (next.forage >= 1) {
+      next.forage = 0;
+      next.fruits += 1;
+    }
+  }
+
+  next.score = faunaScore(next.observedSpecies) + next.style + mewasFound(next.mewas) * 60;
 
   // Progression : si tous les objectifs de l'expédition en cours sont remplis,
   // on passe au niveau suivant et on ouvre les zones qu'il débloque.
@@ -232,8 +339,19 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
   const warnings: string[] = [];
   if (next.vitals.health < 30) warnings.push("Santé critique");
   if (next.vitals.hydration < 20) warnings.push("Déshydratation");
+  if (next.vitals.hunger < 20) warnings.push("Famine");
   if (swimState(next.player.position[0], next.player.position[2], next.elapsed, clock.hour).risk > 0.6) {
     warnings.push("Crocodiles à proximité");
+  }
+
+  // --- Fin d'expédition : la santé à zéro ferme la partie.
+  let death: DeathState | null = null;
+  if (finalState.vitals.health <= 0) {
+    const cause: DeathState["cause"] =
+      finalState.vitals.hydration < 15 ? "soif" : finalState.vitals.hunger < 12 ? "faim" : "blessure";
+    finalState.vitals.health = 0;
+    death = { cause, at: finalState.elapsed, score: finalState.score };
+    finalState.death = death;
   }
 
   return {
@@ -243,6 +361,8 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     observations,
     warnings,
     completedLevel: advanced.completed,
+    mewas: mewaStep.collected,
+    death,
   };
 }
 
@@ -268,6 +388,132 @@ export function applyGadget(state: GameState, gadgetId: string, seconds: number)
   return { ...state, gadgets };
 }
 
+// ------------------------------------------------------------------
+// Gestes de survie
+// ------------------------------------------------------------------
+
+export interface ActionResult {
+  state: GameState;
+  /** Code stable, traduit par l'interface. */
+  code:
+    | "drink.ok"
+    | "drink.none"
+    | "eat.ok"
+    | "eat.none"
+    | "grill.ok"
+    | "grill.none"
+    | "grill.far"
+    | "weave.ok"
+    | "weave.threads"
+    | "weave.owned";
+  amount?: number;
+}
+
+function clampVitals(vitals: PlayerVitals): PlayerVitals {
+  const clamp = (n: number) => Math.min(100, Math.max(0, n));
+  return {
+    ...vitals,
+    stamina: clamp(vitals.stamina),
+    hydration: clamp(vitals.hydration),
+    hunger: clamp(vitals.hunger),
+    health: clamp(vitals.health),
+  };
+}
+
+/** Y a-t-il de l'eau à portée de main (berge, haut-fond) ? */
+export function waterWithin(x: number, z: number, radius = 2.6): boolean {
+  if (waterDepthAt(x, z) > 0.12) return true;
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (i * Math.PI) / 4;
+    if (waterDepthAt(x + Math.cos(angle) * radius, z + Math.sin(angle) * radius) > 0.12) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Boire à la rivière (E). */
+export function drinkWater(state: GameState): ActionResult {
+  if (state.death) return { state, code: "drink.none" };
+  const [x, , z] = state.player.position;
+  if (!waterWithin(x, z)) return { state, code: "drink.none" };
+  const vitals = clampVitals({
+    ...state.vitals,
+    hydration: state.vitals.hydration + 32,
+    // L'eau du bassin n'est pas potable : elle étanche la soif, elle ne
+    // répare pas. Le filtre à eau, lui, en fait une ressource sûre.
+    health: state.vitals.health + (state.gadgets.some((g) => g.id === "filtre-eau") ? 4 : 0),
+  });
+  return { state: { ...state, vitals }, code: "drink.ok", amount: Math.round(vitals.hydration) };
+}
+
+/** Manger un fruit cueilli (F). */
+export function eatFruit(state: GameState): ActionResult {
+  if (state.death || state.fruits <= 0) return { state, code: "eat.none" };
+  const vitals = clampVitals({
+    ...state.vitals,
+    hunger: state.vitals.hunger + 22,
+    hydration: state.vitals.hydration + 7,
+  });
+  return {
+    state: { ...state, vitals, fruits: state.fruits - 1 },
+    code: "eat.ok",
+    amount: state.fruits - 1,
+  };
+}
+
+/** Griller de la viande au feu du camp (G). */
+export function grillMeat(state: GameState): ActionResult {
+  if (state.death) return { state, code: "grill.none" };
+  if (!atCamp(state)) return { state, code: "grill.far" };
+  if (state.hunt.meat < 1) return { state, code: "grill.none" };
+  const vitals = clampVitals({
+    ...state.vitals,
+    hunger: state.vitals.hunger + 46,
+    health: state.vitals.health + 8,
+  });
+  return {
+    state: {
+      ...state,
+      vitals,
+      hunt: { ...state.hunt, meat: state.hunt.meat - 1 },
+    },
+    code: "grill.ok",
+    amount: Math.round(state.hunt.meat - 1),
+  };
+}
+
+/** Tisser une tenue avec des Fils de Rêve (dans le vestiaire). */
+export function weaveOutfit(state: GameState, outfitId: string): ActionResult {
+  const outfit = getOutfit(outfitId);
+  if (outfit.threads <= 0 || state.woven.includes(outfit.id)) {
+    return { state, code: "weave.owned" };
+  }
+  if (state.death || state.threads < outfit.threads) {
+    return { state, code: "weave.threads" };
+  }
+  return {
+    state: {
+      ...state,
+      threads: state.threads - outfit.threads,
+      woven: [...state.woven, outfit.id],
+    },
+    code: "weave.ok",
+    amount: state.threads - outfit.threads,
+  };
+}
+
+/** Repartir pour une nouvelle expédition, en gardant les tenues tissées. */
+export function restartExpedition(state: GameState, characterId = state.player.characterId): GameState {
+  const fresh = newGame(characterId);
+  return {
+    ...fresh,
+    mewas: spawnMewas(Math.floor(Math.random() * 2 ** 31), DEFAULT_START.position),
+    woven: state.woven,
+    player: { ...fresh.player, outfit: state.player.outfit },
+  };
+}
+
 /** Sérialise l'état pour l'API de sauvegarde. */
 export function serialize(state: GameState): Record<string, unknown> {
   return {
@@ -285,6 +531,14 @@ export function serialize(state: GameState): Record<string, unknown> {
     level: state.level,
     score: state.score,
     progress: state.progress,
+    mewas: state.mewas,
+    threads: state.threads,
+    xp: state.xp,
+    style: state.style,
+    fruits: state.fruits,
+    forage: Math.round(state.forage * 100) / 100,
+    woven: state.woven,
+    death: state.death,
     hunt: {
       arsenal: state.hunt.arsenal,
       meat: Math.round(state.hunt.meat),
@@ -329,6 +583,43 @@ export function deserialize(raw: Record<string, unknown>): GameState {
     progress: deserializeProgress(raw.progress),
     gadgets: initialGadgets(Array.isArray(raw.visitedZones) ? (raw.visitedZones as string[]) : []),
     hunt: deserializeHunt(raw.hunt),
+    mewas: deserializeMewas(raw.mewas, base),
+    threads: typeof raw.threads === "number" ? raw.threads : 0,
+    xp: typeof raw.xp === "number" ? raw.xp : 0,
+    style: typeof raw.style === "number" ? raw.style : 0,
+    fruits: typeof raw.fruits === "number" ? raw.fruits : base.fruits,
+    forage: typeof raw.forage === "number" ? raw.forage : 0,
+    woven: Array.isArray(raw.woven) ? (raw.woven as string[]) : [],
+    death: deserializeDeath(raw.death),
+  };
+}
+
+/** Les Mewas d'une sauvegarde, avec leurs positions ; sinon on les replace. */
+function deserializeMewas(raw: unknown, base: GameState): MewaState[] {
+  if (!Array.isArray(raw)) return base.mewas;
+  const parsed = raw
+    .filter((entry): entry is Partial<MewaState> => Boolean(entry) && typeof entry === "object")
+    .map((entry, index) => ({
+      id: typeof entry.id === "number" ? entry.id : index,
+      x: Number(entry.x) || 0,
+      z: Number(entry.z) || 0,
+      homeX: Number(entry.homeX) || Number(entry.x) || 0,
+      homeZ: Number(entry.homeZ) || Number(entry.z) || 0,
+      collected: Boolean(entry.collected),
+      phase: Number(entry.phase) || 0,
+    }));
+  return parsed.length ? parsed : base.mewas;
+}
+
+function deserializeDeath(raw: unknown): DeathState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Partial<DeathState>;
+  const cause = source.cause;
+  if (cause !== "soif" && cause !== "faim" && cause !== "blessure") return null;
+  return {
+    cause,
+    at: Number(source.at) || 0,
+    score: Number(source.score) || 0,
   };
 }
 

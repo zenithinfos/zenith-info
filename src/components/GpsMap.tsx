@@ -23,7 +23,7 @@ export interface MapMarker {
   id: string;
   label: string;
   position: [number, number, number];
-  kind: "joueur" | "équipe" | "camp" | "danger";
+  kind: "joueur" | "équipe" | "camp" | "danger" | "mewa";
 }
 
 export default function GpsMap({
@@ -185,9 +185,14 @@ export default function GpsMap({
                   ? "#d17340"
                   : marker.kind === "camp"
                     ? "#e0c07a"
-                    : "#8fd0c2";
+                    : marker.kind === "mewa"
+                      ? "#8fdcff"
+                      : "#8fd0c2";
             return (
               <g key={marker.id}>
+                {marker.kind === "mewa" && (
+                  <circle cx={point.x} cy={point.y} r={2.4} fill={colour} opacity={0.22} />
+                )}
                 <circle cx={point.x} cy={point.y} r={marker.kind === "joueur" ? 1.8 : 1.3} fill={colour} />
                 {!compact && (
                   <text

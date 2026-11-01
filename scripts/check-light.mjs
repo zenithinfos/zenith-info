@@ -96,15 +96,15 @@ const row = (label, rgb, min = 30) => {
  * teinte de la matière. Une texture sombre rend tout éclairage inutile — c'est
  * pourquoi ces valeurs sont mesurées et non supposées.
  *
- *   foliage.png  77 111  83   × teinte 0xf2f6ee
- *   bark.jpg     74  63  48   × teinte 0x8c7a5e (grisée)
+ *   foliage.png  77 111  83   × teinte moyenne 0xedb29a
+ *   bark.jpg     74  63  48   × teinte 0xc9c2b2
  *   ground.jpg   47  38  24
  */
 const mix = (rgb, hex) => {
   const t = [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255];
   return (rgb[0] << 16) | (Math.round((rgb[1] * t[1]) / 255) << 8) | Math.round((rgb[2] * t[2]) / 255);
 };
-const LEAF = mix([77, 111, 83], 0xf2f6ee);
+const LEAF = mix([77, 111, 83], 0xedb29a);
 const BARK = mix([74, 63, 48], 0xc9c2b2);
 // ground.jpg (47/38/24) × gain 1,65 × couleur de sommet moyenne 0,9
 const SOIL = [Math.round(47 * 1.8 * 0.9), Math.round(38 * 1.7 * 0.9), Math.round(24 * 1.55 * 0.9)];

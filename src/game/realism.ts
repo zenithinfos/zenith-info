@@ -29,7 +29,9 @@ export interface RealismSettings {
 }
 
 export const DEFAULT_REALISM: RealismSettings = {
-  dayLengthMinutes: 24,
+  // Une heure de jeu par 2,5 minutes réelles : la journée dure assez pour
+  // explorer, et la nuit n'arrive plus au bout de dix minutes de marche.
+  dayLengthMinutes: 60,
   weather: true,
   wetness: true,
   fatigue: true,
@@ -135,6 +137,8 @@ export function initialWeather(month = new Date().getMonth() + 1): WeatherState 
 export interface PlayerVitals {
   stamina: number; // 0-100
   hydration: number; // 0-100
+  /** Faim : 100 = rassasié, 0 = ventre vide. */
+  hunger: number; // 0-100
   health: number; // 0-100
   /** 0-1 : mouillé jusqu'aux os. */
   wetness: number;
@@ -142,7 +146,7 @@ export interface PlayerVitals {
 }
 
 export function initialVitals(): PlayerVitals {
-  return { stamina: 100, hydration: 88, health: 100, wetness: 0, temperature: 27 };
+  return { stamina: 100, hydration: 88, hunger: 82, health: 100, wetness: 0, temperature: 27 };
 }
 
 export interface VitalInput {
@@ -170,9 +174,22 @@ export function tickVitals(
   }
 
   if (settings.survival) {
-    next.hydration = clamp(vitals.hydration - 0.22 * dt, 0, 100);
-    if (next.hydration < 15) next.health = clamp(next.health - 0.35 * dt, 0, 100);
+    // Deux réserves baissent en permanence : l'eau plus vite que le pain.
+    // Rythme de survie : environ vingt-cinq minutes d'eau, trente de pain.
+    // Assez lent pour explorer, assez rapide pour qu'une gourde oubliée se
+    // paie avant la fin de la journée.
+    next.hydration = clamp(vitals.hydration - 0.06 * dt, 0, 100);
+    next.hunger = clamp(vitals.hunger - 0.045 * dt, 0, 100);
+    // À sec ou le ventre vide, la santé ne tient pas longtemps : c'est le
+    // mode de jeu lui-même, pas une option.
+    if (next.hydration < 15) next.health = clamp(next.health - 0.4 * dt, 0, 100);
+    if (next.hunger < 12) next.health = clamp(next.health - 0.32 * dt, 0, 100);
     if (next.stamina < 5) next.health = clamp(next.health - 0.1 * dt, 0, 100);
+    // Se reposer au camp soigne lentement — à condition d'avoir bu et mangé.
+    // Un homme déshydraté ne récupère pas parce qu'il est assis.
+    if (input.sheltered && next.hydration > 15 && next.hunger > 12) {
+      next.health = clamp(next.health + 0.9 * dt, 0, 100);
+    }
   }
 
   if (settings.wetness) {
@@ -196,6 +213,7 @@ function round1(value: number): number {
 export function vitalsWarning(vitals: PlayerVitals): string | null {
   if (vitals.health < 30) return "Santé critique : soignez-vous ou rejoignez le camp.";
   if (vitals.hydration < 20) return "Déshydratation : buvez de l'eau filtrée.";
+  if (vitals.hunger < 20) return "Ventre vide : mangez un fruit ou grillez de la viande.";
   if (vitals.stamina < 12) return "Épuisement : marchez quelques minutes.";
   if (vitals.wetness > 0.8) return "Trempé : le froid vous ralentit.";
   return null;

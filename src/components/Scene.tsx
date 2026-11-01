@@ -31,6 +31,7 @@ import {
 } from "@/game/forest";
 import { terrainHeight } from "@/game/terrain";
 import { type Animal } from "@/game/animals";
+import { type MewaState } from "@/game/mewas";
 import { type WeaponId } from "@/game/hunting";
 import {
   createWaterSurface,
@@ -128,6 +129,8 @@ export interface SceneController {
   requestLook: () => void;
   /** Instantané de la faune : le rendu se contente de le dessiner. */
   setAnimals: (animals: Animal[]) => void;
+  /** Les esprits de la forêt : un instantané suffit, ils flottent seuls. */
+  setMewas: (mewas: MewaState[]) => void;
   /** Arme tenue en main. */
   setWeapon: (id: WeaponId) => void;
   /** Visée (arme épaulée). */
@@ -198,6 +201,30 @@ function makeShaftTexture(): THREE.Texture {
     ctx.globalCompositeOperation = "destination-out";
     ctx.fillStyle = side;
     ctx.fillRect(0, 0, 64, 256);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
+ * Halo des Mewas : un dégradé radial bleu, dessiné à la volée.
+ * Additif et sans écriture dans le tampon de profondeur, pour qu'il brille
+ * à travers les feuilles sans les découper.
+ */
+function makeGlowTexture(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gradient.addColorStop(0, "rgba(236, 250, 255, 1)");
+    gradient.addColorStop(0.28, "rgba(150, 220, 255, 0.72)");
+    gradient.addColorStop(0.62, "rgba(80, 170, 255, 0.22)");
+    gradient.addColorStop(1, "rgba(40, 120, 255, 0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 128, 128);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -1300,6 +1327,102 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     };
 
     // ------------------------------------------------------------------
+    // Mewas : les esprits de la forêt
+    // ------------------------------------------------------------------
+    const mewaGroup = new THREE.Group();
+    mewaGroup.name = "mewas";
+    scene.add(mewaGroup);
+
+    const glowTexture = makeGlowTexture();
+    const mewaBodyGeometry = new THREE.SphereGeometry(0.27, 24, 18);
+    const mewaEarGeometry = new THREE.ConeGeometry(0.105, 0.22, 14);
+    const mewaEyeGeometry = new THREE.SphereGeometry(0.046, 12, 10);
+    const mewaEyeMaterial = new THREE.MeshBasicMaterial({ color: 0x05070a });
+
+    interface MewaRig {
+      group: THREE.Group;
+      halo: THREE.Sprite;
+      body: THREE.MeshStandardMaterial;
+      earLeft: THREE.Mesh;
+      earRight: THREE.Mesh;
+      phase: number;
+    }
+    const mewaRigs = new Map<number, MewaRig>();
+
+    const createMewaRig = (mewa: MewaState): MewaRig => {
+      const group = new THREE.Group();
+      const body = new THREE.MeshStandardMaterial({
+        color: 0xf6fbff,
+        emissive: 0xbfe9ff,
+        emissiveIntensity: 1.65,
+        roughness: 0.38,
+        metalness: 0,
+      });
+      const ball = new THREE.Mesh(mewaBodyGeometry, body);
+      group.add(ball);
+
+      const earLeft = new THREE.Mesh(mewaEarGeometry, body);
+      earLeft.position.set(-0.13, 0.23, 0);
+      earLeft.rotation.z = 0.36;
+      group.add(earLeft);
+      const earRight = new THREE.Mesh(mewaEarGeometry, body);
+      earRight.position.set(0.13, 0.23, 0);
+      earRight.rotation.z = -0.36;
+      group.add(earRight);
+
+      // Les yeux regardent vers l'avant du Mewa (−Z, comme le personnage).
+      for (const side of [-1, 1]) {
+        const eye = new THREE.Mesh(mewaEyeGeometry, mewaEyeMaterial);
+        eye.position.set(side * 0.085, 0.03, -0.24);
+        group.add(eye);
+      }
+
+      const halo = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: glowTexture,
+          color: 0x9fdcff,
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      halo.scale.set(2.1, 2.1, 1);
+      group.add(halo);
+
+      mewaGroup.add(group);
+      return { group, halo, body, earLeft, earRight, phase: mewa.phase };
+    };
+
+    // Deux lampes seulement, portées par les deux esprits les plus proches :
+    // dix lumières ponctuelles coûteraient plus que tout le reste de la scène.
+    const mewaLights = [0, 1].map(() => {
+      const light = new THREE.PointLight(0x86ccff, 0, 8, 2);
+      light.visible = false;
+      scene.add(light);
+      return light;
+    });
+
+    /** Instantané des Mewas : on crée, on cache, on oublie. */
+    let mewaSnapshot: MewaState[] = [];
+    const syncMewas = (mewas: MewaState[]) => {
+      mewaSnapshot = mewas;
+      const seen = new Set<number>();
+      for (const mewa of mewas) {
+        if (mewa.collected) continue;
+        seen.add(mewa.id);
+        if (!mewaRigs.has(mewa.id)) mewaRigs.set(mewa.id, createMewaRig(mewa));
+      }
+      for (const [id, rig] of mewaRigs) {
+        if (seen.has(id)) continue;
+        mewaGroup.remove(rig.group);
+        rig.halo.material.dispose();
+        rig.body.dispose();
+        mewaRigs.delete(id);
+      }
+    };
+
+    // ------------------------------------------------------------------
     // Arme en main
     // ------------------------------------------------------------------
     const viewModel: ViewModel = createViewModel();
@@ -1540,7 +1663,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         uniforms: {
           tDiffuse: { value: null },
           uTime: { value: 0 },
-          uVignette: { value: 0.3 },
+          uVignette: { value: 0.18 },
           uGrain: { value: 0.035 },
         },
         vertexShader: `
@@ -1753,6 +1876,51 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         }
       }
 
+      // Mewas : flottement, pulsation, et la lueur bleue des plus proches.
+      const nearMewas: { x: number; z: number; distance: number }[] = [];
+      for (const mewa of mewaSnapshot) {
+        const rig = mewaRigs.get(mewa.id);
+        if (!rig) continue;
+        if (mewa.collected) {
+          rig.group.visible = false;
+          continue;
+        }
+        const distance = Math.hypot(mewa.x - camera.position.x, mewa.z - camera.position.z);
+        if (distance > 78) {
+          rig.group.visible = false;
+          continue;
+        }
+        rig.group.visible = true;
+        const groundY = terrainHeight(mewa.x, mewa.z);
+        const bob = Math.sin(elapsed * 1.7 + rig.phase) * 0.13;
+        rig.group.position.set(mewa.x, groundY + 1.12 + bob, mewa.z);
+        // Il fait face au joueur : c'est ce qui donne l'impression d'être suivi.
+        rig.group.rotation.y =
+          Math.atan2(camera.position.x - mewa.x, camera.position.z - mewa.z) + Math.PI;
+        const pulse = 0.62 + Math.sin(elapsed * 3.1 + rig.phase) * 0.16;
+        (rig.halo.material as THREE.SpriteMaterial).opacity = pulse;
+        rig.halo.scale.setScalar(1.9 + pulse * 0.4);
+        rig.body.emissiveIntensity = 1.35 + pulse * 0.75;
+        rig.earLeft.rotation.z = 0.36 + Math.sin(elapsed * 2.2 + rig.phase) * 0.07;
+        rig.earRight.rotation.z = -0.36 - Math.sin(elapsed * 2.2 + rig.phase) * 0.07;
+        nearMewas.push({ x: mewa.x, z: mewa.z, distance });
+      }
+      nearMewas.sort((a, b) => a.distance - b.distance);
+      mewaLights.forEach((light, index) => {
+        const candidate = nearMewas[index];
+        if (!candidate || candidate.distance > 24) {
+          light.visible = false;
+          return;
+        }
+        light.visible = true;
+        light.position.set(
+          candidate.x,
+          terrainHeight(candidate.x, candidate.z) + 1.1,
+          candidate.z,
+        );
+        light.intensity = 3.6 * Math.max(0, 1 - candidate.distance / 26);
+      });
+
       // Faune : on repose chaque individu à partir de l'instantané du moteur.
       for (const animal of animalSnapshot) {
         const rig = animalRigs.get(animal.id);
@@ -1941,6 +2109,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       setAnimals(animals) {
         syncAnimals(animals);
       },
+      setMewas(mewas) {
+        syncMewas(mewas);
+      },
       setWeapon(id) {
         viewModel.setWeapon(id);
         requestedWeapon = id;
@@ -2029,6 +2200,16 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         if ((playerRig as AvatarRig).source === "gltf") disposeAvatar(playerRig as AvatarRig);
         else disposeHumanRig(playerRig);
         viewModel.dispose();
+        for (const rig of mewaRigs.values()) {
+          rig.halo.material.dispose();
+          rig.body.dispose();
+        }
+        mewaRigs.clear();
+        mewaBodyGeometry.dispose();
+        mewaEarGeometry.dispose();
+        mewaEyeGeometry.dispose();
+        mewaEyeMaterial.dispose();
+        glowTexture.dispose();
         textures.forEach((texture) => texture.dispose());
         shaftTexture.dispose();
         contactTexture.dispose();

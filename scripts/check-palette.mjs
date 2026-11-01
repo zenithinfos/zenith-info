@@ -116,12 +116,15 @@ function solveTint(texture, target) {
  * au vert d'eau (bleu aussi fort que rouge).
  */
 const MATIERES = [
-  { label: "feuillage clair", texture: "foliage", now: 0xf2f6ee, target: 0x5d6b34 },
-  { label: "feuillage profond", texture: "foliageDeep", now: 0xc8d4c0, target: 0x33422a },
-  { label: "feuillage pâle", texture: "foliagePale", now: 0xffffff, target: 0x79825a },
-  { label: "fougère", texture: "fern", now: 0xffffff, target: 0x6a7a45 },
-  { label: "grande feuille", texture: "bigleaf", now: 0xffffff, target: 0x51683a },
-  { label: "litière", texture: "foliagePale", now: 0x8c7a5e, target: 0x554a2c },
+  // Teintes réellement posées dans Scene.tsx : c'est la seule façon que ce
+  // contrôle mesure quelque chose. (Elles ont été résolues à l'envers, à partir
+  // des cibles photo ci-dessous, par la bissection de `solveTint`.)
+  { label: "feuillage clair", texture: "foliage", now: 0xfbb092, target: 0x5d6b34 },
+  { label: "feuillage profond", texture: "foliageDeep", now: 0xdca788, target: 0x33422a },
+  { label: "feuillage pâle", texture: "foliagePale", now: 0xf1c0b4, target: 0x79825a },
+  { label: "fougère", texture: "fern", now: 0xd9aa92, target: 0x6a7a45 },
+  { label: "grande feuille", texture: "bigleaf", now: 0xfab29a, target: 0x51683a },
+  { label: "litière", texture: "foliagePale", now: 0xbc8174, target: 0x554a2c },
   { label: "écorce", texture: "bark", now: 0xc9c2b2, target: 0x453b2c },
   { label: "sol", texture: "ground", now: 0xffffff, target: 0x6b5330, gainNow: 1.8, gainNext: 1.8 },
 ];
