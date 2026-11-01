@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { PLANS, formatPrice, type Plan } from "@/lib/plans";
+import { plansFor } from "@/i18n/catalogue";
+import { useI18n } from "@/i18n/LocaleProvider";
 
 /**
  * Formules et paiement. En mode simulation, le parcours est complet mais aucun
@@ -11,13 +13,16 @@ import { PLANS, formatPrice, type Plan } from "@/lib/plans";
 type Provider = "paypal" | "airtel" | "moov";
 
 const PROVIDERS: { id: Provider; label: string; icon: string; note: string }[] = [
-  { id: "paypal", label: "PayPal", icon: "🅿️", note: "Carte bancaire international" },
+  { id: "paypal", label: "PayPal", icon: "🅿️", note: "" },
   { id: "airtel", label: "Airtel Money", icon: "📱", note: "Gabon · XAF" },
   { id: "moov", label: "Moov Money", icon: "📲", note: "Gabon · XAF" },
 ];
 
 export default function Pricing() {
-  const [plan, setPlan] = useState<Plan>(PLANS[1] ?? PLANS[0]);
+  const { locale, t } = useI18n();
+  const plans = useMemo(() => plansFor(locale), [locale]);
+  const [planId, setPlanId] = useState<string>((PLANS[1] ?? PLANS[0]).id);
+  const plan: Plan = plans.find((candidate) => candidate.id === planId) ?? plans[0];
   const [provider, setProvider] = useState<Provider>("paypal");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -50,7 +55,9 @@ export default function Pricing() {
         error?: string;
       };
 
-      if (!response.ok) throw new Error(data.error ?? `Erreur ${response.status}`);
+      if (!response.ok) {
+        throw new Error(data.error ?? `${t("pricing.error")} ${response.status}`);
+      }
 
       if (data.approvalUrl) {
         window.location.href = data.approvalUrl;
@@ -68,12 +75,12 @@ export default function Pricing() {
         const confirmed = (await confirm.json()) as { status?: string; error?: string };
         setStatus(
           confirmed.status === "paid"
-            ? `Paiement simulé confirmé. Référence ${data.reference}.`
-            : `Paiement en attente : ${confirmed.error ?? "suivez les instructions de votre opérateur."}`,
+            ? `${t("pricing.simulated")} ${data.reference}.`
+            : `${t("pricing.pending")} ${confirmed.error ?? t("pricing.operator")}`,
         );
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Paiement indisponible");
+      setStatus(error instanceof Error ? error.message : t("pricing.unavailable"));
     } finally {
       setBusy(false);
     }
@@ -83,24 +90,19 @@ export default function Pricing() {
     <div className="grid gap-6 lg:grid-cols-[1.35fr_1fr]">
       <div className="space-y-4">
         <div>
-          <p className="eyebrow">Soutenir le projet</p>
-          <h2 className="display mt-1 text-3xl text-parchment">
-            Une forêt qui se joue, une forêt qui se protège.
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm text-mist/65">
-            10 % des recettes « Mécène » sont reversés à des programmes de surveillance de la
-            réserve. Paiement par carte (PayPal) ou Mobile Money au Gabon.
-          </p>
+          <p className="eyebrow">{t("support.kicker")}</p>
+          <h2 className="display mt-1 text-3xl text-parchment">{t("pricing.title")}</h2>
+          <p className="mt-2 max-w-2xl text-sm text-mist/65">{t("pricing.lede")}</p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
-          {PLANS.map((candidate) => {
+          {plans.map((candidate) => {
             const active = candidate.id === plan.id;
             return (
               <button
                 key={candidate.id}
                 type="button"
-                onClick={() => setPlan(candidate)}
+                onClick={() => setPlanId(candidate.id)}
                 className={`relative rounded-xl border p-4 text-left transition ${
                   active
                     ? "border-amber-glow/70 bg-canopy-800"
@@ -110,7 +112,7 @@ export default function Pricing() {
               >
                 {candidate.recommended && (
                   <span className="absolute right-3 top-3 rounded-full bg-amber-glow/20 px-2 py-0.5 text-[0.55rem] uppercase tracking-wider text-amber-glow">
-                    conseillé
+                    {t("pricing.recommended")}
                   </span>
                 )}
                 <p className="text-sm font-semibold text-parchment">{candidate.label}</p>
@@ -131,7 +133,7 @@ export default function Pricing() {
 
       <form onSubmit={submit} className="panel space-y-3 p-5">
         <div>
-          <p className="eyebrow">Paiement</p>
+          <p className="eyebrow">{t("pricing.payment")}</p>
           <p className="text-sm font-semibold text-parchment">
             {plan.label} · {formatPrice(plan.amountCents, plan.currency)}
           </p>
@@ -139,7 +141,7 @@ export default function Pricing() {
 
         <fieldset className="space-y-1.5">
           <legend className="mb-1 text-[0.62rem] uppercase tracking-[0.18em] text-mist/45">
-            Moyen de paiement
+            {t("pricing.provider")}
           </legend>
           {PROVIDERS.map((item) => (
             <label
@@ -161,7 +163,9 @@ export default function Pricing() {
               <span className="text-base">{item.icon}</span>
               <span className="flex-1">
                 <span className="block font-semibold text-parchment">{item.label}</span>
-                <span className="block text-[0.6rem] text-mist/50">{item.note}</span>
+                <span className="block text-[0.6rem] text-mist/50">
+                  {item.id === "paypal" ? t("pricing.provider.card") : item.note}
+                </span>
               </span>
             </label>
           ))}
@@ -169,7 +173,7 @@ export default function Pricing() {
 
         {provider === "paypal" ? (
           <label className="block text-[0.65rem] text-mist/60">
-            E-mail du reçu
+            {t("pricing.email")}
             <input
               type="email"
               value={email}
@@ -180,7 +184,7 @@ export default function Pricing() {
           </label>
         ) : (
           <label className="block text-[0.65rem] text-mist/60">
-            Numéro Mobile Money
+            {t("pricing.phone")}
             <input
               type="tel"
               value={phone}
@@ -192,15 +196,12 @@ export default function Pricing() {
         )}
 
         <button type="submit" className="btn btn-primary w-full" disabled={busy}>
-          {busy ? "Traitement…" : `Payer ${formatPrice(plan.amountCents, plan.currency)}`}
+          {busy
+            ? t("pricing.processing")
+            : `${t("pricing.pay")} ${formatPrice(plan.amountCents, plan.currency)}`}
         </button>
 
-        <p className="text-[0.6rem] leading-relaxed text-mist/40">
-          Mode démonstration : aucun débit réel n&apos;est effectué tant que{" "}
-          <code className="rounded bg-canopy-900 px-1">PAYMENT_MODE</code> vaut{" "}
-          <code className="rounded bg-canopy-900 px-1">simulation</code>. Écrivez à
-          support@zenith-info.example pour toute question.
-        </p>
+        <p className="text-[0.6rem] leading-relaxed text-mist/40">{t("pricing.demo")}</p>
 
         {status && (
           <p className="rounded-lg border border-moss-300/30 bg-moss-400/10 px-3 py-2 text-[0.7rem] text-parchment">
@@ -209,7 +210,7 @@ export default function Pricing() {
         )}
         {reference && (
           <p className="text-[0.6rem] text-mist/45">
-            Conservez la référence <strong className="text-parchment">{reference}</strong>.
+            {t("pricing.reference")} <strong className="text-parchment">{reference}</strong>.
           </p>
         )}
       </form>

@@ -16,7 +16,14 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          // Le preview Arena affiche le site dans une iframe d'un autre
+          // domaine : X-Frame-Options: SAMEORIGIN la casserait. On exprime la
+          // même intention en CSP, en autorisant explicitement l'hôte de
+          // prévisualisation.
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors 'self' https://*.e2b.app https://*.arena.ai",
+          },
         ],
       },
       {
@@ -25,6 +32,10 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
           { key: "Service-Worker-Allowed", value: "/" },
         ],
+      },
+      {
+        source: "/video/(.*)",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
       },
       {
         source: "/models/(.*)",

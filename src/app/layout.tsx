@@ -1,14 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { APP_NAME, APP_VERSION } from "@/lib/version";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
 
 export const metadata: Metadata = {
   title: {
-    default: `${APP_NAME} — le jeu de la forêt gabonaise`,
+    default: `${APP_NAME} — le jeu de la forêt de l'Ogooué-Ivindo`,
     template: `%s · ${APP_NAME}`,
   },
   description:
-    "Jeu de survie 3D dans la réserve de Minkébé : pistez la faune, chassez, dépecez, cartographiez les bais, jouez en équipe jusqu'à huit. Next.js · Three.js · PostgreSQL.",
+    "Jeu de survie 3D dans la forêt de Minkébé (province de l'Ogooué-Ivindo, Gabon) : pistez la faune, chassez, dépecez, cartographiez les baïs, jouez en équipe jusqu'à huit. Next.js · Three.js · PostgreSQL.",
   applicationName: APP_NAME,
   manifest: "/manifest.webmanifest",
   metadataBase: new URL(process.env.NEXT_PUBLIC_GAME_URL ?? "http://localhost:3000"),
@@ -22,7 +23,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: `${APP_NAME} — la forêt de Minkébé`,
     description:
-      "Un jeu de survie et d'exploration, en solo ou à huit, dans l'une des forêts les plus intactes du bassin du Congo.",
+      "Un jeu de survie et d'exploration dans la forêt de Minkébé, province de l'Ogooué-Ivindo au Gabon — en solo ou à huit.",
     type: "website",
     locale: "fr_FR",
     images: [{ url: "/images/menu-forest.jpg", width: 1600, height: 900, alt: "Canopée de Minkébé" }],
@@ -40,15 +41,17 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fr">
+    <html lang="fr-FR">
       <body className="min-h-dvh antialiased">
-        <a
-          href="#jeu"
-          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-amber-glow focus:px-4 focus:py-2 focus:text-canopy-950"
-        >
-          Aller au jeu
-        </a>
-        {children}
+        <LocaleProvider>
+          <a
+            href="#jeu"
+            className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-amber-glow focus:px-4 focus:py-2 focus:text-canopy-950"
+          >
+            Aller au jeu
+          </a>
+          {children}
+        </LocaleProvider>
       </body>
     </html>
   );

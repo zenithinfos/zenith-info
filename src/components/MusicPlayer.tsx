@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useI18n } from "@/i18n/LocaleProvider";
 
 /**
  * Bande-son de Minkébé : ambiances de forêt et thèmes traditionnels.
@@ -18,6 +19,7 @@ interface Track {
   emoji: string;
 }
 
+/** Titres et ambiances, en français. L'anglais s'ajoute plus bas. */
 const TRACKS: Track[] = [
   {
     id: "mougongo",
@@ -48,7 +50,26 @@ const TRACKS: Track[] = [
   },
 ];
 
+const TRACKS_EN: Record<string, Pick<Track, "title" | "artist" | "mood">> = {
+  mougongo: {
+    title: "Le Mougongo",
+    artist: "Minkébé Ensemble",
+    mood: "River song",
+  },
+  reveil: {
+    title: "Waking in the forest",
+    artist: "Dawn ambience",
+    mood: "Dawn · hornbills",
+  },
+  canopee: {
+    title: "Under the canopy",
+    artist: "Daytime ambience",
+    mood: "Day · insects",
+  },
+};
+
 export default function MusicPlayer() {
+  const { locale, t } = useI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -56,7 +77,9 @@ export default function MusicPlayer() {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
 
-  const track = TRACKS[index];
+  const base = TRACKS[index];
+  const track: Track =
+    locale === "en" ? { ...base, ...(TRACKS_EN[base.id] ?? {}) } : base;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -69,7 +92,7 @@ export default function MusicPlayer() {
     if (!audio) return;
 
     const onError = () => {
-      setError("Piste indisponible sur ce serveur.");
+      setError(t("music.error.missing"));
       setPlaying(false);
     };
     const onTime = () => {
@@ -85,7 +108,7 @@ export default function MusicPlayer() {
       audio.removeEventListener("timeupdate", onTime);
       audio.removeEventListener("ended", onEnded);
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -95,7 +118,7 @@ export default function MusicPlayer() {
     if (playing) {
       void audio.play().catch(() => {
         setPlaying(false);
-        setError("Lecture bloquée par le navigateur — cliquez à nouveau.");
+        setError(t("music.error.blocked"));
       });
     }
   }, [index]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -114,10 +137,10 @@ export default function MusicPlayer() {
       setPlaying(true);
       setError(null);
     } catch {
-      setError("Lecture impossible : vérifiez le fichier audio.");
+      setError(t("music.error.failed"));
       setPlaying(false);
     }
-  }, [playing, volume]);
+  }, [playing, volume, t]);
 
   const next = () => setIndex((i) => (i + 1) % TRACKS.length);
   const previous = () => setIndex((i) => (i - 1 + TRACKS.length) % TRACKS.length);
@@ -126,12 +149,12 @@ export default function MusicPlayer() {
     <section className="panel space-y-3 p-5" aria-labelledby="musique-titre">
       <header className="flex items-center justify-between gap-2">
         <div>
-          <p className="eyebrow">Bande-son</p>
+          <p className="eyebrow">{t("music.kicker")}</p>
           <h2 id="musique-titre" className="display text-xl">
-            Écouter la forêt
+            {t("music.title")}
           </h2>
         </div>
-        <span className="chip">{playing ? "en lecture" : "en pause"}</span>
+        <span className="chip">{playing ? t("music.playing") : t("music.paused")}</span>
       </header>
 
       <audio ref={audioRef} src={track.src} preload="none" loop={false} />
@@ -157,7 +180,7 @@ export default function MusicPlayer() {
       </div>
 
       <div className="flex items-center gap-2">
-        <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={previous} aria-label="Piste précédente">
+        <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={previous} aria-label={t("music.previous")}>
           ⏮
         </button>
         <button
@@ -166,9 +189,9 @@ export default function MusicPlayer() {
           onClick={() => void toggle()}
           aria-pressed={playing}
         >
-          {playing ? "⏸ Pause" : "▶ Écouter"}
+          {playing ? t("music.pause") : t("music.play")}
         </button>
-        <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={next} aria-label="Piste suivante">
+        <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={next} aria-label={t("music.next")}>
           ⏭
         </button>
 
@@ -182,7 +205,7 @@ export default function MusicPlayer() {
             value={volume}
             onChange={(event) => setVolume(Number(event.target.value))}
             className="h-1 w-20 accent-amber-glow"
-            aria-label="Volume"
+            aria-label={t("music.volume")}
           />
         </label>
       </div>

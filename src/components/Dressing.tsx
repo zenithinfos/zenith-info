@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { CHARACTERS } from "@/game/characters";
 import { OUTFITS, canWear, getOutfit, unlockedOutfits } from "@/game/outfits";
+import { characterCopy, outfitCopy } from "@/i18n/catalogue";
+import { useI18n } from "@/i18n/LocaleProvider";
 
 /**
  * Vestiaire : choix du personnage et de la tenue.
@@ -27,20 +29,21 @@ export default function Dressing({
   outfitId?: string;
   onChange?: (selection: { characterId: string; outfitId: string }) => void;
 }) {
+  const { locale, t } = useI18n();
   const [character, setCharacter] = useState(characterId);
   const [outfit, setOutfit] = useState(outfitId);
 
   const available = useMemo(() => unlockedOutfits(level), [level]);
-  const current = getOutfit(outfit);
+  const current = outfitCopy(getOutfit(outfit), locale);
 
   const stats = useMemo(
     () => [
-      { key: "Discrétion", value: BASE.stealth * current.modifiers.stealth, max: 1.3 },
-      { key: "Endurance", value: (BASE.stamina / 34) * current.modifiers.stamina, max: 1.4 },
-      { key: "Résistance", value: BASE.resilience * current.modifiers.resilience, max: 1 },
-      { key: "Vitesse", value: (BASE.speed / 1.6) * current.modifiers.speed, max: 1.15 },
+      { key: t("dressing.stealth"), value: BASE.stealth * current.modifiers.stealth, max: 1.3 },
+      { key: t("dressing.stamina"), value: (BASE.stamina / 34) * current.modifiers.stamina, max: 1.4 },
+      { key: t("dressing.resilience"), value: BASE.resilience * current.modifiers.resilience, max: 1 },
+      { key: t("dressing.speed"), value: (BASE.speed / 1.6) * current.modifiers.speed, max: 1.15 },
     ],
-    [current],
+    [current, t],
   );
 
   const select = (nextCharacter: string, nextOutfit: string) => {
@@ -53,16 +56,19 @@ export default function Dressing({
     <section className="panel space-y-4 p-5 md:p-6" aria-labelledby="vestiaire-titre">
       <header className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <p className="eyebrow">Vestiaire</p>
+          <p className="eyebrow">{t("dressing.kicker")}</p>
           <h2 id="vestiaire-titre" className="display text-2xl">
-            S&apos;équiper pour la forêt
+            {t("dressing.title")}
           </h2>
         </div>
-        <span className="chip">Niveau {level}</span>
+        <span className="chip">
+          {t("dressing.level")} {level}
+        </span>
       </header>
 
       <div className="flex flex-wrap gap-2">
-        {CHARACTERS.map((candidate) => (
+        {CHARACTERS.map((candidate) => {
+          return (
           <button
             key={candidate.id}
             type="button"
@@ -75,14 +81,18 @@ export default function Dressing({
             aria-pressed={character === candidate.id}
           >
             <span className="block font-semibold text-parchment">{candidate.name}</span>
-            <span className="text-[0.65rem] text-mist/60">{candidate.role}</span>
+            <span className="text-[0.65rem] text-mist/60">
+              {characterCopy(candidate, locale).role}
+            </span>
           </button>
-        ))}
+          );
+        })}
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2">
-          {OUTFITS.map((item) => {
+          {OUTFITS.map((base) => {
+            const item = outfitCopy(base, locale);
             const unlocked = canWear(item.id, level);
             return (
               <button
@@ -106,7 +116,9 @@ export default function Dressing({
                 <span className="min-w-0">
                   <span className="block truncate text-sm text-parchment">{item.name}</span>
                   <span className="block truncate text-[0.65rem] text-mist/55">
-                    {unlocked ? item.description : `Débloquée au niveau ${item.unlockLevel}`}
+                    {unlocked
+                      ? item.description
+                      : `${t("dressing.locked")} ${item.unlockLevel}`}
                   </span>
                 </span>
               </button>
@@ -114,14 +126,13 @@ export default function Dressing({
           })}
           {available.length < OUTFITS.length && (
             <p className="text-[0.65rem] text-mist/45">
-              {OUTFITS.length - available.length} tenue(s) encore verrouillée(s) : gagnez des
-              points en observant la faune.
+              {OUTFITS.length - available.length} {t("dressing.lockedNote")}
             </p>
           )}
         </div>
 
         <div className="rounded-xl border border-mist/12 bg-canopy-950/50 p-4">
-          <p className="eyebrow mb-2">Effet de la tenue</p>
+          <p className="eyebrow mb-2">{t("dressing.effect")}</p>
           <p className="mb-3 text-sm font-semibold text-parchment">{current.name}</p>
           <div className="space-y-2">
             {stats.map((stat) => {

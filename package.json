@@ -19,7 +19,9 @@
     "preview:water": "node scripts/preview-water.mjs --size 640x360 --ss 2 --out ./preview",
     "preview:faune": "node scripts/preview-animals.mjs --out ./preview/faune.png",
     "preview:perso": "node scripts/check-human.mjs --out ./preview/personnage.png",
-    "preview:scene": "node scripts/preview-scene.mjs --size 480x270 --out ./preview"
+    "preview:scene": "node scripts/preview-scene.mjs --size 480x270 --out ./preview",
+    "trailer": "node scripts/game-trailer.mjs",
+    "trailer:still": "node scripts/game-trailer.mjs --still 240,420,600,780"
   },
   "dependencies": {
     "drizzle-orm": "0.45.4",

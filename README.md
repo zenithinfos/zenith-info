@@ -1,7 +1,11 @@
 # MINKÉBÉ
 
-Jeu de survie et d'exploration dans la réserve de Minkébé (nord-est du Gabon) :
-on y piste la faune, on chasse, on dépece — et on revient au camp.
+Jeu de survie et d'exploration dans la forêt de Minkébé, **province de
+l'Ogooué-Ivindo**, au nord-est du Gabon : on y piste la faune, on chasse, on
+dépece — et on revient au camp.
+
+Interface en **français et en anglais** (sélecteur dans l'en-tête, préférence
+mémorisée).
 Forêt 3D procédurale, faune réactive, carnet de terrain, multijoueur à 8, sauvegardes
 PostgreSQL et distribution (clients + paquet serveur).
 
@@ -37,6 +41,8 @@ sauvegardes, salons et paiements fonctionnent en mémoire (perdus au redémarrag
 | `npm run check:human` | Vérifie le squelette, la prise en main des armes, la marche |
 | `npm run preview:faune` | Planche de proportions de la faune (`preview/faune.png`) |
 | `npm run preview:perso` | Rendu logiciel du personnage (`preview/personnage.png`) |
+| `npm run trailer` | Rend la bande-annonce MP4 (`public/video/minkebe-trailer.mp4`) |
+| `npm run trailer:still` | Extrait quatre images du film, pour contrôle |
 | `npm run db:push` | Applique le schéma Drizzle à PostgreSQL |
 
 ---
@@ -63,7 +69,7 @@ sauvegardes, salons et paiements fonctionnent en mémoire (perdus au redémarrag
 ```
 src/
 ├── app/
-│   ├── page.tsx                 page d'accueil (jeu, faune, zones, téléchargements, tarifs)
+│   ├── page.tsx                 accueil : métadonnées + <LandingPage />
 │   ├── admin/page.tsx           console d'administration (jeton requis)
 │   └── api/
 │       ├── health · about       sondes et métadonnées de build
@@ -73,7 +79,11 @@ src/
 │       ├── saves[/id]           sauvegardes (PostgreSQL ou mémoire)
 │       ├── rooms[/code]/…       salons multijoueurs (create / join / leave / sync)
 │       └── pay/…                checkout, confirm, mobile-money, verify, webhooks
-├── components/                  Scene (Three.js), HUD, carte GPS, vestiaire, lecteur, etc.
+├── components/
+│   ├── Scene.tsx                rendu Three.js (forêt, eau, ciel, faune, armes)
+│   ├── LandingPage.tsx          la page d'accueil : six sections, la bande-annonce
+│   └── …                        HUD, carte GPS, vestiaire, lecteur audio
+├── i18n/                        fr + en : dictionnaire, détection, <html lang>
 ├── game/                        moteur pur (sans three) : engine, faune, zones, météo, eau…
 ├── db/                          schéma Drizzle, connexion, repli mémoire
 └── lib/                         distribution, paiements, PayPal, salons, sauvegardes
@@ -291,6 +301,80 @@ tableau de chasse sont sauvegardés avec l'expédition.
 
 Contrôle : `npm run check:hunt` (balistique, munitions, dépeçage, géométrie
 des rives, comportement de la harde).
+
+## Bande-annonce
+
+La vidéo est un vrai MP4, rendu par `scripts/game-trailer.mjs` : quarante-deux
+secondes, six plans, encodées par ffmpeg depuis des images calculées en flux
+(brut sur l'entrée standard, rien d'écrit entre la scène et le film).
+
+Il n'y a pas de navigateur dans l'environnement de développement : impossible
+de filmer le jeu en WebGL. Le script construit donc **le monde du jeu avec ses
+propres modules** — `forest.ts` pour les tuiles, `terrain.ts` pour le relief,
+`AnimalModel.ts` pour la faune, `HumanModel.ts` pour le personnage et son
+arme — et le filme avec un rasteriseur logiciel (tampon de profondeur,
+perspective correcte, lumière lambert). Ce n'est pas le rendu WebGL : pas de
+PBR, pas d'ombres portées, pas de bloom. Mais ce sont de vraies caméras, de
+vrais animaux qui marchent, une vraie arme qui recule. Une image fixe retouchée
+n'aurait rien montré de tout ça.
+
+Le montage :
+
+| Temps | Plan |
+|---|---|
+| 0-9 s | la futaie, caméra à hauteur d'œil qui avance |
+| 9-16 s | le pisteur de dos, fusil en main |
+| 16-24 s | la harde dans une trouée (bongos, gorille, éléphant) |
+| 24-29 s | vue subjective, arme en joue, éclair de bouche |
+| 29-37 s | la nuit, lucioles, halos de lampe |
+| 37-42 s | carton de fin |
+
+Côté page, `components/GameTrailer.tsx` ne télécharge la vidéo qu'au premier
+clic et affiche ses **six chapitres** comme sommaire : la barre de progression
+est aussi un menu, et le chapitre en cours s'allume.
+
+Trois détails qui ont demandé du travail, et qui se voient :
+
+- au-delà de la quarantaine de mètres où s'arrête le décor détaillé, on sème
+  des fûts en silhouette (`drawFarForest`) peints directement dans la couleur
+  de la brume, du plus sombre au plus clair selon la distance. Sans eux,
+  l'horizon est un mur vert parfaitement plat ;
+- le fond entre les fûts est une brume *éclairée* et non un aplat sombre : les
+  feuilles s'y découpent en silhouette, comme dans une forêt humide ;
+- un vrai objectif ne fait pas la mise au point à trente centimètres : les
+  cartes de feuillage trop proches et trop grandes sont écartées, sinon elles
+  couvrent l'image comme un drap ;
+- la nuit passe par une exposition globale (`EXPOSURE`) et pas seulement par un
+  soleil plus faible : la courbe ACES relève tellement les basses lumières
+  qu'une scène de nuit réglée à la baisse ressortait gris-vert ;
+- le carton de fin est composé en SVG (sharp) puis posé en fondu sur les
+  dernières secondes. Le rasteriseur ne connaît pas les glyphes ; une vidéo
+  sans mot-symbole final n'est pas une bande-annonce.
+
+Un détail qui a coûté cher : `frameBuffer` est un `Buffer` Node, pas un
+`Uint8ClampedArray`. Une valeur négative issue du grade y était écrite *modulo
+256* — un pixel sombre à -0,009 devenait 254, soit un point rouge vif. Toute la
+« moucheture rouge » du premier plan venait de là, pas des textures. Les octets
+sont désormais bornés explicitement.
+
+## Langues
+
+Français et anglais. Le dictionnaire est dans `src/i18n/dictionary.ts` : une
+clé, une phrase, et le dictionnaire anglais est typé sur le français — une clé
+manquante ne compile pas. `src/i18n/LocaleProvider.tsx` lit la préférence
+(`localStorage`, avec `useSyncExternalStore` pour éviter les rendus en cascade),
+détecte la langue du navigateur à défaut, et met à jour `<html lang>`.
+
+Couvert : la page d'accueil entière — héros, lieu, bande-annonce, faune,
+téléchargements, formules, vestiaire, bande-son, accessibilité —, l'écran de
+départ, les commandes, le HUD et les messages de chasse. Les fiches qui ne sont
+pas des phrases d'interface (paquets, formules, tenues, personnages, pistes)
+sont traduites par surcouche dans `src/i18n/catalogue.ts` : le français reste
+la source, l'anglais s'ajoute au rendu, et les tables sont typées par
+identifiant — un paquet sans traduction s'affiche en français plutôt que vide.
+
+Ce qui reste hors périmètre : les descriptions d'espèces du carnet de terrain,
+qui viennent de `src/game/fauna.ts`. Elles s'ajouteront là où elles sont.
 
 ## Personnages
 

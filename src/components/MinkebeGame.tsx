@@ -18,6 +18,7 @@ import {
   weatherLabel,
 } from "@/game/engine";
 import { CHARACTERS, getCharacter } from "@/game/characters";
+import { useI18n } from "@/i18n/LocaleProvider";
 import { getZone } from "@/game/levels";
 import { worldClock } from "@/game/realism";
 import { faunaScore, getSpecies } from "@/game/fauna";
@@ -70,6 +71,7 @@ function bearingTo(from: [number, number, number], to: [number, number]): number
 }
 
 export default function MinkebeGame() {
+  const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("accueil");
   const [characterId, setCharacterId] = useState("michelle");
   const [hud, setHud] = useState<GameState | null>(null);
@@ -850,37 +852,37 @@ export default function MinkebeGame() {
                     onClick={skinCarcass}
                     className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-glow/50 bg-canopy-950/80 px-3 py-1.5 text-xs text-parchment backdrop-blur"
                   >
-                    🔪 Dépecer · {carcassNear}
+                    🔪 {t("game.skin")} · {carcassNear}
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans">E</kbd>
                   </button>
                 )}
                 {showHints && (
                   <div className="pointer-events-none flex flex-wrap items-center justify-center gap-1.5 rounded-full bg-canopy-950/70 px-3 py-1.5 text-[0.62rem] text-mist/75 backdrop-blur">
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">ZQSD</kbd>
-                    <span>marcher</span>
+                    <span>{t("game.hints.walk")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Maj</kbd>
-                    <span>courir</span>
+                    <span>{t("game.hints.run")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Ctrl</kbd>
-                    <span>s&apos;accroupir</span>
+                    <span>{t("game.hints.crouch")}</span>
                     <span className="text-mist/30">·</span>
-                    <span>clic droit : épauler</span>
+                    <span>{t("game.hints.aim")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">clic</kbd>
-                    <span>tirer</span>
+                    <span>{t("game.hints.fire")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">1-5</kbd>
-                    <span>armes</span>
+                    <span>{t("game.hints.weapons")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">R</kbd>
-                    <span>recharger</span>
+                    <span>{t("game.hints.reload")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">V</kbd>
-                    <span>vue</span>
+                    <span>{t("game.hints.view")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Échap</kbd>
-                    <span>pause</span>
+                    <span>{t("game.hints.pause")}</span>
                   </div>
                 )}
                 {ambient && (
@@ -890,7 +892,7 @@ export default function MinkebeGame() {
                 )}
                 <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
                   <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => setShowMap((v) => !v)}>
-                    🗺️ Carte <kbd className="opacity-50">M</kbd>
+                    🗺️ {t("game.map")} <kbd className="opacity-50">M</kbd>
                   </button>
                   <button
                     type="button"
@@ -898,13 +900,14 @@ export default function MinkebeGame() {
                     onClick={() => setView((v) => (v === "premier" ? "troisieme" : "premier"))}
                     aria-pressed={view === "troisieme"}
                   >
-                    {view === "troisieme" ? "🎥 Épaule" : "👁️ Première"} <kbd className="opacity-50">V</kbd>
+                    {view === "troisieme" ? `🎥 ${t("game.viewShoulder")}` : `👁️ ${t("game.viewFirst")}`}{" "}
+                    <kbd className="opacity-50">V</kbd>
                   </button>
                   <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => void saveGame()}>
-                    💾 Sauvegarder
+                    💾 {t("game.save")}
                   </button>
                   <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => setPhase("pause")}>
-                    ⏸️ Pause
+                    ⏸️ {t("game.pause")}
                   </button>
                   <button
                     type="button"
@@ -912,7 +915,7 @@ export default function MinkebeGame() {
                     onClick={() => setVoiceOn((v) => !v)}
                     aria-pressed={voiceOn}
                   >
-                    🔊 Voix
+                    🔊 {t("game.voice")}
                   </button>
                 </div>
               </div>
@@ -934,7 +937,7 @@ export default function MinkebeGame() {
                   type="button"
                   onClick={reload}
                   className="grid h-11 w-11 place-items-center rounded-full border border-mist/25 bg-canopy-900/70 text-sm backdrop-blur active:scale-95"
-                  aria-label="Recharger"
+                  aria-label={t("game.reload")}
                 >
                   🔄
                 </button>
@@ -952,9 +955,9 @@ export default function MinkebeGame() {
                     firingRef.current = false;
                   }}
                   className="grid h-20 w-20 place-items-center rounded-full border border-laterite-400/60 bg-laterite-500/30 text-xs font-semibold uppercase tracking-wider text-parchment backdrop-blur active:scale-95"
-                  aria-label="Tirer"
+                  aria-label={t("game.fire")}
                 >
-                  Tirer
+                  {t("game.fire")}
                 </button>
               </div>
 
@@ -980,20 +983,21 @@ export default function MinkebeGame() {
                     doit lire en arrivant : le titre, pas un sous-titre. */}
                 <div className="space-y-2">
                   <p className="text-[0.6rem] uppercase tracking-[0.42em] text-moss-300">
-                    Jeu de survie · Gabon · 0° 30′ N
+                    {t("hero.kicker")}
                   </p>
                   <h2 className="display text-5xl leading-[0.9] tracking-[0.16em] text-parchment md:text-7xl">
-                    MINKÉBÉ
+                    {t("hero.title")}
                   </h2>
                   <span className="block h-px w-28 bg-gradient-to-r from-amber-glow via-laterite-400/60 to-transparent" />
                 </div>
-                <p className="eyebrow">Expédition 01 · Réserve de Minkébé</p>
+                <p className="eyebrow">{t("hero.place")}</p>
                 <h3 className="display text-xl text-parchment/90 md:text-2xl">
-                  Entrez dans l&apos;une des dernières forêts intactes du Gabon.
+                  {t("game.title")}
                 </h3>
                 <p className="max-w-xl text-sm text-mist/75">
-                  Suivez la faune dans la futaie, épaules une arme, abattez, dépecez.
-                  La viande se rapporte au camp ; le carnet garde la trace du reste.
+                  Suivez la faune dans la futaie de l&apos;Ogooué-Ivindo : épaulez une arme,
+                  abattez, dépecez. La viande se rapporte au camp ; le carnet garde la
+                  trace du reste.
                 </p>
 
                 <div className="flex flex-wrap gap-2">
@@ -1018,10 +1022,10 @@ export default function MinkebeGame() {
 
                 <div className="flex flex-wrap items-center gap-2">
                   <button type="button" className="btn btn-primary" onClick={() => void startGame("nouveau")}>
-                    ▶ Commencer l&apos;expédition
+                    ▶ {t("game.start")}
                   </button>
                   <button type="button" className="btn btn-ghost" onClick={() => void startGame("reprendre")}>
-                    ⟲ Reprendre
+                    ⟲ {t("game.resume")}
                   </button>
                   <button
                     type="button"
@@ -1031,13 +1035,12 @@ export default function MinkebeGame() {
                       pushToast({ title: "Caméra libre", detail: "Cliquez pour capturer la souris, Échap pour libérer.", tone: "info" });
                     }}
                   >
-                    🖱️ Regarder
+                    🖱️ {t("game.look")}
                   </button>
                 </div>
 
                 <p className="text-[0.7rem] text-mist/45">
-                  Clavier : ZQSD / WASD · Maj courir · Ctrl s&apos;accroupir · M carte · Échap pause.
-                  Sur mobile, utilisez le joystick.
+                  {t("game.controls")} · {t("game.mobile")}
                 </p>
               </div>
             </div>
@@ -1057,7 +1060,7 @@ export default function MinkebeGame() {
                     ▶ Reprendre l&apos;expédition
                   </button>
                   <button type="button" className="btn btn-ghost w-full" onClick={() => void saveGame()}>
-                    💾 Sauvegarder maintenant
+                    💾 {t("game.save")} maintenant
                   </button>
                   <button type="button" className="btn btn-ghost w-full" onClick={() => setPhase("accueil")}>
                     ⌂ Retour au menu
@@ -1102,11 +1105,11 @@ export default function MinkebeGame() {
             <span className={`h-2 w-2 rounded-full ${room ? "bg-moss-300" : "bg-mist/30"}`} />
             {room ? (
               <span>
-                Salon <strong className="text-parchment">{room.code}</strong> ·{" "}
-                {remotePlayers.length + 1}/{room.maxPlayers} explorateurs
+                {t("game.room")} <strong className="text-parchment">{room.code}</strong> ·{" "}
+                {remotePlayers.length + 1}/{room.maxPlayers} {t("game.explorers")}
               </span>
             ) : (
-              <span>Mode solo — créez un salon pour jouer à plusieurs.</span>
+              <span>{t("game.soloNote")}</span>
             )}
           </div>
 
