@@ -1295,6 +1295,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // jamais. Le modèle importé prend sa place dès qu'il est chargé.
     let playerRig: HumanRig = createHumanRig();
     setHumanWeapon(playerRig, "machette");
+    // Le maillage arrive après le premier rendu : il faut lui rendre l'arme
+    // que le joueur a déjà choisie entre-temps.
+    let requestedWeapon: WeaponId = "machette";
     playerRig.group.visible = false;
     scene.add(playerRig.group);
 
@@ -1310,7 +1313,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         avatar.group.position.copy(playerRig.group.position);
         avatar.group.rotation.copy(playerRig.group.rotation);
         avatar.group.visible = playerRig.group.visible;
-        equipAvatarWeapon(avatar, "machette");
+        equipAvatarWeapon(avatar, requestedWeapon);
         scene.remove(playerRig.group);
         playerRig.group.traverse((child) => {
           if (child instanceof THREE.Mesh) child.geometry.dispose();
@@ -1910,6 +1913,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       },
       setWeapon(id) {
         viewModel.setWeapon(id);
+        requestedWeapon = id;
         equipAny(playerRig, id);
       },
       setAiming(value) {

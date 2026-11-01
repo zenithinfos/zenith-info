@@ -117,8 +117,8 @@ export function avatarPose(input: AvatarPoseInput): AvatarPoseResult {
   const swingArm = swing * amp * (0.55 - aim * 0.45);
   rotations.LeftArm = [armDown, 0, swingArm];
   rotations.RightArm = [armDown, 0, -swingArm];
-  rotations.LeftForeArm = [0, 0, -0.3 - Math.max(0, -swing) * amp * 0.4 - aim * 0.15];
-  rotations.RightForeArm = [0, 0, -0.3 - Math.max(0, swing) * amp * 0.4 - aim * 0.15];
+  rotations.LeftForeArm = [0, 0, -0.12 - Math.max(0, -swing) * amp * 0.45 - aim * 0.2];
+  rotations.RightForeArm = [0, 0, -0.12 - Math.max(0, swing) * amp * 0.35 - aim * 0.2];
 
   // Quand on vise, un léger déhanchement accompagne la vitesse de déplacement.
   if (aim > 0.01) {
