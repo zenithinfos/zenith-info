@@ -732,6 +732,7 @@ export default function MinkebeGame() {
               sceneRef.current = controller;
               controller.setWeapon(huntRef.current.arsenal.current);
               controller.setAnimals(animalsRef.current);
+              controller.setView(view);
             }}
             onError={(message) =>
               pushToast({ title: "Rendu 3D limité", detail: message, tone: "alerte" })
