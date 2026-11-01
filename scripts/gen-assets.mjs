@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { generateTextures } from "./lib/textures.mjs";
+import { generatePhotoTextures } from "./lib/photos.mjs";
 
 const ROOT = process.cwd();
 const PUBLIC = path.join(ROOT, "public");
@@ -197,7 +198,16 @@ async function generateMenuImages() {
 
 // Les textures de la forêt sont dessinées dans scripts/lib/textures.mjs
 // (feuillages à découpe alpha, écorce, litière, canopée, brume, roche).
+/**
+ * Deux sources, volontairement séparées :
+ *   · `photos.mjs` — les matières de la forêt, dérivées de photographies
+ *     (sol, écorce, feuillages, herbe, canopée). C'est ce qui donne le
+ *     photoréalisme ; du code seul ne peut pas le produire.
+ *   · `textures.mjs` — les effets qui ne sont pas des matières (brume, roche,
+ *     normales d'eau).
+ */
 async function generateForestTextures() {
+  await generatePhotoTextures({ publicDir: PUBLIC, force });
   await generateTextures({ publicDir: PUBLIC, force });
 }
 

@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { barkMaps, groundMaps } from "./materials.mjs";
-import { Canvas, fbm, normalMap } from "./raster.mjs";
+import { fbm } from "./raster.mjs";
 
 /* ------------------------------------------------------------------ */
 /* Utilitaires                                                         */
@@ -521,38 +521,13 @@ export function rockSvg({ size = 512, seed = 11 } = {}) {
 /* Écriture                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Textures encore produites ici (procédurales) : uniquement les effets qui ne
+ * sont pas des matières — brume, roche, normales d'eau. **Toutes les matières
+ * de la forêt sont photographiques** (voir scripts/lib/photos.mjs) : un
+ * feuillage dessiné par du code ne peut pas être photoréaliste.
+ */
 const RASTER = [
-  { file: "foliage.png", svg: foliageSvg({}), type: "png", label: "bouquet de feuilles", grain: { amount: 0.18, tint: 0.06 } },
-  {
-    file: "foliage-deep.png",
-    svg: foliageSvg({ seed: 42, hue: 132, sat: 34, light: 18, count: 190 }),
-    type: "png",
-    label: "feuillage de sous-bois",
-  },
-  {
-    file: "spray.png",
-    svg: spraySvg({}),
-    type: "png",
-    label: "feuilles éparses",
-    grain: { amount: 0.2, tint: 0.07 },
-  },
-  {
-    file: "foliage-pale.png",
-    svg: foliageSvg({ seed: 91, hue: 86, sat: 48, light: 40, count: 120 }),
-    type: "png",
-    label: "feuillage de lumière",
-  },
-  { file: "bigleaf.png", svg: bigleafSvg({}), type: "png", label: "grandes feuilles", grain: { amount: 0.18, tint: 0.06 } },
-  { file: "fern.png", svg: fernSvg({}), type: "png", label: "fougère", grain: { amount: 0.18, tint: 0.06 } },
-  { file: "grass.png", svg: grassSvg({}), type: "png", label: "herbe de baï", grain: { amount: 0.18, tint: 0.06 } },
-  {
-    file: "canopy.png",
-    svg: canopySvg({}),
-    type: "png",
-    width: 640,
-    height: 640,
-    label: "canopée (vue du sol)",
-  },
   { file: "mist.png", svg: mistSvg({}), type: "png", label: "brume" },
   { file: "rock.jpg", svg: rockSvg({}), type: "jpeg", label: "roche" },
   { file: "water_normal.jpg", svg: waterNormalSvg({}), type: "jpeg", label: "normales d'eau" },
@@ -645,43 +620,4 @@ export async function generateTextures({ publicDir, force = false, log = console
     log(`✓ textures/${item.file} — ${item.label} (${Math.round(finalOutput.length / 1024)} Ko)`);
   }
 
-  // Cartes de normales des cartes de feuillage : la luminance sert de relief.
-  // Une carte d'alpha-test éclairée à plat fait « autocollant » ; avec une
-  // normale, chaque feuille peint son propre ombrage.
-  const NORMALLED = [
-    "foliage.png",
-    "foliage-deep.png",
-    "foliage-pale.png",
-    "bigleaf.png",
-    "fern.png",
-    "grass.png",
-    "spray.png",
-  ];
-  for (const file of NORMALLED) {
-    const source = path.join(dir, file);
-    const target = path.join(dir, file.replace(/\.png$/, "_normal.jpg"));
-    if (!existsSync(source)) continue;
-    if (!force && existsSync(target)) {
-      log(`· textures/${path.basename(target)} existe déjà`);
-      continue;
-    }
-    const { data, info } = await sharp(source)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const w = info.width;
-    const h = info.height;
-    const canvas = new Canvas(w, h);
-    for (let i = 0; i < w * h; i++) {
-      const a = data[i * 4 + 3] / 255;
-      const l = (0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]) / 255;
-      canvas.height_[i] = a > 0.25 ? l : 0;
-    }
-    const normal = normalMap(canvas, w * 0.05);
-    const out = await sharp(Buffer.from(normal), { raw: { width: w, height: h, channels: 3 } })
-      .jpeg({ quality: 82, mozjpeg: true })
-      .toBuffer();
-    await writeFile(target, out);
-    log(`✓ textures/${path.basename(target)} — normales (${Math.round(out.length / 1024)} Ko)`);
-  }
 }

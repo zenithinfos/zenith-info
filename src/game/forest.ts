@@ -300,7 +300,7 @@ export function crownCards(tree: Tree, random: () => number): CrownCard[] {
       angle: a + (random() - 0.5) * 0.8,
       tilt: 0.42,
       // Les bouquets extérieurs sont épars : le ciel passe entre les feuilles.
-      sparse: radius > spread * 0.42 && random() < 0.7,
+      sparse: false,
     });
   }
 
@@ -660,7 +660,7 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
   // --- litière : feuilles mortes posées à plat, ce que la texture de sol ne
   // peut pas donner (relief, accroche de lumière au premier plan).
   const litter: LitterPatch[] = [];
-  const litterCount = Math.round(area * 0.11);
+  const litterCount = Math.round(area * 0.03);
   for (let i = 0; i < litterCount; i++) {
     const x = originX + rand() * TILE_SIZE;
     const z = originZ + rand() * TILE_SIZE;
@@ -668,8 +668,8 @@ export function buildTile(tileX: number, tileZ: number, options: TileOptions = {
     litter.push({
       x,
       z,
-      y: terrainHeight(x, z) + 0.045 + rand() * 0.03,
-      scale: 0.35 + Math.pow(rand(), 1.6) * 1.15,
+      y: terrainHeight(x, z) + 0.05 + rand() * 0.03,
+      scale: 0.25 + Math.pow(rand(), 1.8) * 0.7,
       rotation: rand() * Math.PI * 2,
       tone: roll < 0.42 ? 0 : roll < 0.78 ? 1 : 2,
     });

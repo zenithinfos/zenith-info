@@ -155,29 +155,30 @@ La forêt est générée par des modules purs, testables sans navigateur :
 
 Principes de rendu :
 
-- **Tuilage** : la forêt est découpée en tuiles de 48 unités (`buildTile`). Le jeu
-  charge celles qui entourent le joueur (rayon 2 tuiles) et libère les autres.
+- **Aucune matière n'est dessinée par du code.** Le sol (litière, racines,
+  cailloux, mousse), l'écorce (fibres, crevasses, lichens) et tous les
+  feuillages (houppier, sous-bois, fougère, grandes feuilles, herbe, canopée)
+  sont des **photographies** retravaillées par `scripts/lib/photos.mjs` :
+  mise en tuile sans couture, détourage alpha progressif sans liseré blanc,
+  carte de normales dérivée du relief photographique. C'est la seule façon
+  d'obtenir du photoréalisme — un feuillage dessiné restera toujours un
+  dessin. Les photographies sources vivent dans `assets/raw/`.
+- **Tuilage** : la forêt est découpée en tuiles de 48 unités (`buildTile`). Le
+  jeu charge celles qui entourent le joueur (rayon 2 tuiles) et libère les
+  autres.
 - **Quatre strates** : émergents (22–32 m), arbres moyens (11–19 m), jeunes
   arbres (6–12 m) et arbustes de sous-bois (2–5 m) qui bouchent l'horizon.
 - **Houppiers en nuage** : neuf à onze bouquets répartis dans un ellipsoïde,
-  dont les bouquets extérieurs utilisent une carte de **feuilles éparses**
-  (`spray.png`) — le ciel passe entre les feuilles au lieu d'une boule pleine.
-  Chaque arbre de canopée porte trois ou quatre **charpentières** réelles.
-- **Chablis** : un bruit déterministe (`gapAt`) ouvre des trouées de chablis
-  dans la futaie. C'est le rythme de la forêt tropicale, et la seule façon de
-  voir un rayon de soleil traverser.
-- **Sous-bois** : fougères, balisiers, buissons, dalles de couvre-sol couchées
-  sur la pente, et herbe de baï dans les milieux ouverts.
-- **Matières peintes au pixel** (`scripts/lib/materials.mjs`) : sol (litière,
-  brindilles, cailloux, mousse) et écorce (fibres, crevasses, lenticelles,
-  lichens) produisent un albédo **et une carte de normales** issus du même
-  champ de hauteur. Les feuillages ont aussi leur normale, dérivée de leur
-  luminance, et un grain photographique dans la découpe alpha.
-- **Ombres de contact** sous chaque tronc et chaque plant : sans elles, tout
-  flotte au-dessus du sol.
+  plus une carte éparse pour laisser passer le ciel. Chaque arbre de canopée
+  porte trois ou quatre **charpentières** réelles.
+- **Chablis** : `gapAt()` ouvre des trouées dans la futaie — le rythme de la
+  forêt tropicale, et la seule façon de voir un rayon traverser.
+- **Lumière physique** : environnement préfiltré (PMREM) pour la lumière
+  d'ambiance, **transluminescence** dans le shader de feuillage (le soleil
+  traverse les feuilles et prend leur couleur), soleil bas et rasant,
+  **brouillard exponentiel**, ombres de contact au pied des troncs.
 - **Post-traitement** (bureau) : bloom sur les trouées de lumière, puis
   étalonnage — désaturation, réchauffement des lumières, vignettage, grain.
-  C'est cette chaîne qui fait passer l'image d'aplats à une photo.
 - **Ciel en dôme** et brume de sous-bois : jamais de bande de ciel nue.
 
 Densités mesurées autour du joueur (`npm run check:forest`) :
@@ -191,9 +192,11 @@ Densités mesurées autour du joueur (`npm run check:forest`) :
 | Colline | 1 % |
 | Canopée | 1 % |
 
-Le rendu se vérifie aussi à l'œil, hors navigateur : `npm run preview:scene`
-écrit quatre PNG depuis un raycaster logiciel qui partage `buildTile`,
-`plantCards` et `crownCards` avec le jeu.
+Le rendu se vérifie aussi hors navigateur : `npm run preview:scene` écrit
+quatre PNG depuis un raycaster logiciel qui partage `buildTile`, `plantCards`
+et `crownCards` avec le jeu. Il ne remplace pas le rendu WebGL (pas de PBR,
+ni d'ombres portées, ni de bloom) : il sert à contrôler la structure et la
+densité, pas la lumière.
 
 ## Assets
 
@@ -201,10 +204,10 @@ Tout `public/` est généré par `scripts/gen-assets.mjs` (+ `scripts/lib/textur
 — sharp, SVG et un écrivain GLB/WAV maison : icônes PWA, visuels de menu,
 textures de forêt, deux modèles low-poly et trois pistes audio.
 
-Les textures de forêt sont dessinées feuille par feuille (bouquets, feuilles
-éparses, fougères, balisiers, herbe, canopée percée de trous de lumière) puis
-quantifiées en palette ; le sol et l'écorce sont peints au pixel avec leurs
-cartes de normales. **~1,3 Mo au total**, normales comprises.
+Les matières de forêt viennent de photographies (`assets/raw/`) finies par
+`scripts/lib/photos.mjs` : tuilage sans couture, détourage, normales.
+`scripts/lib/textures.mjs` ne produit plus que les effets qui ne sont pas des
+matières : brume, roche, normales d'eau. **~2,6 Mo** de textures publiées.
 
 Remplacez ces fichiers par vos propres créations **en conservant les noms** :
 `public/models/Michelle.glb`, `public/models/Soldier.glb`,

@@ -486,10 +486,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
             "#include <lights_fragment_end>",
             `#include <lights_fragment_end>
              {
-               // Face arrière éclairée : le soleil traverse la feuille.
+               // Face arrière éclairée : le soleil traverse la feuille, qui
+               // filtre la lumière. On multiplie donc par son albédo.
                float back = clamp(-dot(normal, uSunDirView), 0.0, 1.0);
                float glancing = pow(back, 1.4);
-               totalEmissiveRadiance += uSunColor * glancing * 0.55;
+               totalEmissiveRadiance += diffuseColor.rgb * uSunColor * glancing * 0.8;
              }`,
           );
       };
@@ -564,8 +565,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     );
 
     // Litière : feuilles mortes à plat, très légèrement inclinées sur la pente.
-    const litterMaterial = foliageMaterial(TEXTURES.foliageDeep, {
-      tint: 0x8a7a5c,
+    const litterMaterial = foliageMaterial(TEXTURES.foliagePale, {
+      tint: 0x8c7a5e,
       sway: 0.01,
       alphaTest: 0.5,
       normal: TEXTURES.foliageDeepNormal,
@@ -573,27 +574,27 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     });
 
     const sprayMaterial = foliageMaterial(TEXTURES.spray, {
-      tint: 0xe4ecd8,
+      tint: 0xf2f6ee,
       sway: 0.1,
-      normal: TEXTURES.sprayNormal,
+      normal: TEXTURES.foliageNormal,
       normalScale: 0.9,
     });
 
     const foliageMaterials = [
       foliageMaterial(TEXTURES.foliage, {
-        tint: 0xdfe8d2,
+        tint: 0xf2f6ee,
         sway: 0.07,
         normal: TEXTURES.foliageNormal,
         normalScale: 0.85,
       }),
       foliageMaterial(TEXTURES.foliageDeep, {
-        tint: 0xa8bb9a,
+        tint: 0xc8d4c0,
         sway: 0.05,
         normal: TEXTURES.foliageDeepNormal,
         normalScale: 0.8,
       }),
       foliageMaterial(TEXTURES.foliagePale, {
-        tint: 0xeaf2dd,
+        tint: 0xffffff,
         sway: 0.09,
         normal: TEXTURES.foliagePaleNormal,
         normalScale: 0.9,
@@ -614,14 +615,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         normalScale: 0.95,
       }),
       bush: foliageMaterial(TEXTURES.foliage, {
-        tint: 0xb9c9a8,
+        tint: 0xd6e0cc,
         sway: 0.1,
         alphaTest: 0.44,
         normal: TEXTURES.foliageNormal,
         normalScale: 0.8,
       }),
-      cover: foliageMaterial(TEXTURES.foliagePale, {
-        tint: 0xa9bd94,
+      cover: foliageMaterial(TEXTURES.foliageDeep, {
+        tint: 0xa8b89c,
         sway: 0.06,
         alphaTest: 0.46,
         normal: TEXTURES.foliagePaleNormal,
@@ -677,7 +678,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     const flatUp = new THREE.Vector3();
     const flatBasis = new THREE.Matrix4();
     const tintColor = new THREE.Color();
-    const FOLIAGE_PALETTE = [0x6f9a58, 0x5c8a4c, 0x4e7a44, 0x7aa35f, 0x466e3e, 0x8ab06a];
+    // Multiplicateurs de teinte appliqués aux photos : ils ne doivent pas les
+    // assombrir, seulement varier légèrement d'un arbre à l'autre.
+    const FOLIAGE_PALETTE = [0xa8bda2, 0x96ae90, 0x8aa286, 0xb4c6ac, 0x80927c, 0xc0d0b6];
 
     /** Construit les maillages d'une tuile (géométries partagées, instances propres). */
     const buildTileMeshes = (tileX: number, tileZ: number): THREE.Group => {
@@ -806,7 +809,12 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           // Occlusion verticale : plus on est bas, plus on est à l'ombre du
           // couvert. C'est ce dégradé qui donne la profondeur d'une forêt.
           const ao = 0.55 + 0.45 * Math.min(1, (card.offset[1] + tree.trunkHeight * 0.4) / 14);
-          const bucket = card.sparse ? sparseCards : families[Math.floor(tileRand() * 3)];
+          // Répartition pondérée : 48 % feuillage moyen, 34 % sombre des
+          // profondeurs, 18 % feuillage de lumière. À parts égales, la forêt
+          // paraît délavée.
+          const roll = tileRand();
+          const family = card.sparse ? -1 : roll < 0.48 ? 0 : roll < 0.82 ? 1 : 2;
+          const bucket = family < 0 ? sparseCards : families[family];
           bucket.push({
             matrix: dummy.matrix.clone(),
             colour: new THREE.Color(
@@ -910,7 +918,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       // --- litière
       if (tile.litter.length > 0) {
         const mesh = new THREE.InstancedMesh(cardGeometry, litterMaterial, tile.litter.length);
-        const TONES = [0xb99f74, 0x6d5a3e, 0x8d8a52];
+        const TONES = [0x9c8258, 0x5e4c34, 0x77784a];
         tile.litter.forEach((leaf, index) => {
           dummy.position.set(leaf.x, leaf.y, leaf.z);
           dummy.rotation.set(-Math.PI / 2, leaf.rotation, 0, "YXZ");

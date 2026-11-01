@@ -94,18 +94,68 @@ async function loadTexture(file, size = 160) {
       normals[i + 2] = 1 / len;
     }
   }
-  return { data, width, height, channels, normals };
+  // Couleur moyenne des pixels opaques : sert de mip extrême quand une carte
+  // ne couvre que quelques pixels à l'écran. Sans cela, l'image fourmille.
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let n = 0;
+  for (let i = 0; i < width * height; i++) {
+    if (data[i * channels + 3] < 128) continue;
+    r += data[i * channels];
+    g += data[i * channels + 1];
+    b += data[i * channels + 2];
+    n++;
+  }
+  const average = n > 0 ? [r / n / 255, g / n / 255, b / n / 255] : [0.2, 0.3, 0.2];
+
+  return { data, width, height, channels, normals, average };
 }
 
-function sampleTexture(tex, u, v) {
-  const x = Math.min(tex.width - 1, Math.max(0, Math.floor(u * tex.width)));
-  const y = Math.min(tex.height - 1, Math.max(0, Math.floor((1 - v) * tex.height)));
-  const i = (y * tex.width + x) * tex.channels;
-  const n = (y * tex.width + x) * 3;
-  return {
-    rgba: [tex.data[i] / 255, tex.data[i + 1] / 255, tex.data[i + 2] / 255, tex.data[i + 3] / 255],
-    normal: [tex.normals[n], tex.normals[n + 1], tex.normals[n + 2]],
-  };
+/**
+ * Échantillonnage bilinéaire avec mip approximé : plus la carte est loin,
+ * plus on mélange vers sa couleur moyenne. C'est ce que fait le GPU avec ses
+ * mipmaps ; sans ça, l'aperçu fourmille et ne représente pas le jeu.
+ */
+function sampleTexture(tex, u, v, lod = 0) {
+  const { width, height, channels } = tex;
+  const fx = u * width - 0.5;
+  const fy = (1 - v) * height - 0.5;
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const wrap = (v2, max) => ((v2 % max) + max) % max;
+
+  const rgba = [0, 0, 0, 0];
+  const normal = [0, 0, 0];
+  for (let dy = 0; dy <= 1; dy++) {
+    for (let dx = 0; dx <= 1; dx++) {
+      const px = wrap(x0 + dx, width);
+      const py = wrap(y0 + dy, height);
+      const w = (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty);
+      const i = (py * width + px) * channels;
+      const n = (py * width + px) * 3;
+      rgba[0] += (tex.data[i] / 255) * w;
+      rgba[1] += (tex.data[i + 1] / 255) * w;
+      rgba[2] += (tex.data[i + 2] / 255) * w;
+      rgba[3] += (tex.data[i + 3] / 255) * w;
+      normal[0] += tex.normals[n] * w;
+      normal[1] += tex.normals[n + 1] * w;
+      normal[2] += tex.normals[n + 2] * w;
+    }
+  }
+
+  if (lod > 0) {
+    const mix = Math.min(1, lod);
+    rgba[0] += (tex.average[0] - rgba[0]) * mix;
+    rgba[1] += (tex.average[1] - rgba[1]) * mix;
+    rgba[2] += (tex.average[2] - rgba[2]) * mix;
+    normal[0] += (0 - normal[0]) * mix * 0.6;
+    normal[1] += (0 - normal[1]) * mix * 0.6;
+    normal[2] += (1 - normal[2]) * mix * 0.6;
+  }
+  return { rgba, normal };
 }
 
 /* ------------------------------------------------------------------ */
@@ -201,9 +251,9 @@ function buildScene(game, random, textures) {
         const family = tileRandom();
         const tex = card.sparse
           ? textures.spray
-          : family < 0.45
+          : family < 0.48
             ? textures.foliage
-            : family < 0.78
+            : family < 0.82
               ? textures.foliageDeep
               : textures.foliagePale;
 
@@ -219,8 +269,8 @@ function buildScene(game, random, textures) {
           tex,
           // Occlusion verticale : les cartes basses sont dans l'ombre du couvert.
           tint:
-            (0.82 + tileRandom() * 0.36) *
-            (0.55 + (0.45 * Math.min(1, (card.offset[1] + tree.trunkHeight * 0.4) / 14))),
+            (0.86 + tileRandom() * 0.28) *
+            (0.62 + (0.38 * Math.min(1, (card.offset[1] + tree.trunkHeight * 0.4) / 14))),
         });
       }
     }
@@ -273,7 +323,7 @@ function buildScene(game, random, textures) {
           hw: card.width / 2,
           hh: card.height / 2,
           tex: texture,
-          tint: card.flat ? 0.42 + tileRandom() * 0.22 : 0.6 + tileRandom() * 0.3,
+          tint: card.flat ? 0.5 + tileRandom() * 0.22 : 0.72 + tileRandom() * 0.3,
         });
       }
     }
@@ -426,6 +476,8 @@ function render(scene, game, camera, textures) {
   const { quads, trunks, grid, cell } = scene;
   const fov = (62 * Math.PI) / 180;
   const aspect = WIDTH / HEIGHT;
+  // Angle couvert par un pixel : sert au choix du niveau de détail.
+  const PIXEL_ANGLE = (2 * Math.tan(fov / 2)) / HEIGHT;
   const tanHalf = Math.tan(fov / 2);
 
   // Repère caméra : direction = (sin yaw, 0, cos yaw) à l'horizontale.
@@ -541,7 +593,12 @@ function render(scene, game, camera, textures) {
               const v = (pxw * quad.vAxis[0] + pyw * quad.vAxis[1] + pzw * quad.vAxis[2]) / (2 * quad.hh) + 0.5;
               if (u < 0 || u > 1 || v < 0 || v > 1) continue;
 
-              const texel = sampleTexture(quad.tex, u, v);
+              // Empreinte d'un texel à l'écran : si elle dépasse le pixel,
+              // on mélange vers la couleur moyenne (anti-crénelage).
+              const texelsPerPixel =
+                ((bestT * PIXEL_ANGLE) / Math.max(0.001, quad.hw * 2)) * quad.tex.width;
+              const lod = Math.max(0, Math.min(1, (texelsPerPixel - 1.2) / 2.5));
+              const texel = sampleTexture(quad.tex, u, v, lod);
               if (texel.rgba[3] < 0.42) continue;
 
               bestT = tq;
@@ -628,7 +685,7 @@ function render(scene, game, camera, textures) {
         const front = Math.max(0, dot(N, SUN));
         // Ciel : plus une surface regarde vers le haut, plus elle reçoit du ciel.
         const sky = 0.5 + 0.5 * N[1];
-        const lambert = 0.1 + front * 0.95 + sky * 0.3;
+        const lambert = 0.08 + front * 0.9 + sky * 0.18;
         const warm = 1 + 0.1 * front;
 
         // Transluminescence : le soleil traverse les feuilles minces.
@@ -637,9 +694,11 @@ function render(scene, game, camera, textures) {
 
         const alb = hit.texel.rgba;
         const tint = quad.tint;
-        r = (alb[0] * lambert * warm + through * 0.95) * tint;
-        g = (alb[1] * lambert * warm + through * 0.85) * tint;
-        b = (alb[2] * lambert * warm + through * 0.55) * tint;
+        // La lumière transmise est filtrée par la feuille : on multiplie par
+        // l'albédo, on n'ajoute pas du blanc (sinon tout vire au beige).
+        r = alb[0] * (lambert * warm + through) * tint;
+        g = alb[1] * (lambert * warm + through * 1.05) * tint;
+        b = alb[2] * (lambert * warm + through * 0.7) * tint;
       }
 
       // --- brouillard exponentiel (densité) ---

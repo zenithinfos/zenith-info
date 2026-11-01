@@ -135,7 +135,6 @@ export const TEXTURES = {
   bigleafNormal: "/textures/bigleaf_normal.jpg",
   fernNormal: "/textures/fern_normal.jpg",
   grassNormal: "/textures/grass_normal.jpg",
-  sprayNormal: "/textures/spray_normal.jpg",
 } as const;
 
 /**
