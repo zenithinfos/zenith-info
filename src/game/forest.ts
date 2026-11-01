@@ -17,7 +17,12 @@
 import { ZONES } from "./levels";
 import { terrainHeight, slopeAt, shoreDistance, WORLD_LIMIT } from "./terrain";
 
-export type TreeKind = "emergent" | "mid" | "understory";
+/**
+ * Strates : émergents (au-dessus de la canopée), arbres moyens, jeunes arbres
+ * sous la canopée, et arbustes de sous-bois qui bouchent la vue à hauteur
+ * d'homme — sans eux, on voit le ciel entre les troncs.
+ */
+export type TreeKind = "emergent" | "mid" | "understory" | "sapling";
 
 export interface Tree {
   x: number;
@@ -45,8 +50,8 @@ export interface UnderstoryPlant {
   y: number;
   scale: number;
   rotation: number;
-  /** 0 = fougère, 1 = balisier (grandes feuilles), 2 = buisson. */
-  variant: 0 | 1 | 2;
+  /** 0 = fougère, 1 = balisier, 2 = buisson, 3 = couvre-sol. */
+  variant: 0 | 1 | 2 | 3;
 }
 
 export interface FallenLog {
@@ -143,158 +148,6 @@ class Occupancy {
   }
 }
 
-export interface ForestOptions {
-  treeCount: number;
-  seed?: number;
-  /** Rayon autour du joueur où l'on garde une trouée (spawn, camp). */
-  clearingRadius?: number;
-  /**
-   * Rayon effectif de la forêt. Au-delà du brouillard (≈ 90 unités) la forêt
-   * n'a plus besoin d'être détaillée : on concentre les arbres dans ce rayon.
-   */
-  radius?: number;
-}
-
-export function generateForest({
-  treeCount,
-  seed = 20261101,
-  clearingRadius = 0,
-  radius = WORLD_LIMIT,
-}: ForestOptions): Tree[] {
-  const rand = mulberry32(seed);
-  const occupancy = new Occupancy(7);
-  const trees: Tree[] = [];
-
-  let attempts = 0;
-  const maxAttempts = treeCount * 14;
-
-  while (trees.length < treeCount && attempts < maxAttempts) {
-    attempts++;
-    // Tirage uniforme dans un carré couvrant toute la carte. Un tirage
-    // circulaire laissait les quatre coins nus alors que la carte est carrée
-    // (et la zone « colline » tombait hors du disque).
-    const x = (rand() * 2 - 1) * radius;
-    const z = (rand() * 2 - 1) * radius;
-
-    const clearance = clearingRadius + 4;
-    if (Math.hypot(x, z) < clearance) continue;
-    if (!acceptPoint(x, z, rand, { minShore: 3.5, maxSlope: 0.55 })) continue;
-
-    // Répartition des strates : émergents rares, arbres moyens, taillis.
-    const roll = rand();
-    const kind: TreeKind = roll < 0.14 ? "emergent" : roll < 0.62 ? "mid" : "understory";
-
-    const trunkRadius = kind === "emergent" ? 0.55 + rand() * 0.5 : kind === "mid" ? 0.28 + rand() * 0.26 : 0.12 + rand() * 0.14;
-    const footprint = trunkRadius * 3 + 1.4;
-    if (!occupancy.tryAdd(x, z, footprint)) continue;
-
-    const y = terrainHeight(x, z);
-    const trunkHeight =
-      kind === "emergent" ? 20 + rand() * 9 : kind === "mid" ? 10 + rand() * 7 : 5 + rand() * 5;
-
-    const crownScale =
-      kind === "emergent" ? 8.5 + rand() * 3.5 : kind === "mid" ? 5.6 + rand() * 2.8 : 2.4 + rand() * 1.4;
-
-    trees.push({
-      x,
-      z,
-      y,
-      trunkHeight,
-      trunkRadius,
-      kind,
-      crownScale,
-      crownCards: kind === "understory" ? 2 : 3,
-      rotation: rand() * Math.PI * 2,
-      tint: Math.floor(rand() * 6),
-      lean: [(rand() - 0.5) * 0.12, (rand() - 0.5) * 0.12],
-    });
-  }
-
-  return trees;
-}
-
-export function generateUnderstory({
-  count,
-  seed = 4242,
-  clearingRadius = 0,
-  radius = WORLD_LIMIT,
-}: {
-  count: number;
-  seed?: number;
-  clearingRadius?: number;
-  radius?: number;
-}): UnderstoryPlant[] {
-  const rand = mulberry32(seed);
-  const plants: UnderstoryPlant[] = [];
-  let attempts = 0;
-
-  while (plants.length < count && attempts < count * 8) {
-    attempts++;
-    // Sous-bois : tirage resserré autour du joueur (c'est là qu'on le voit).
-    const angle = rand() * Math.PI * 2;
-    const distance = 1.5 + Math.pow(rand(), 0.7) * radius;
-    const x = Math.cos(angle) * distance;
-    const z = Math.sin(angle) * distance;
-    if (Math.hypot(x, z) < clearingRadius) continue;
-    if (!acceptPoint(x, z, rand, { minShore: 0.8, maxSlope: 0.8 })) continue;
-
-    const roll = rand();
-    plants.push({
-      x,
-      z,
-      y: terrainHeight(x, z),
-      scale: 0.45 + rand() * 1.15,
-      rotation: rand() * Math.PI * 2,
-      variant: roll < 0.45 ? 0 : roll < 0.78 ? 1 : 2,
-    });
-  }
-
-  return plants;
-}
-
-export function generateLogs({
-  count,
-  seed = 909,
-}: {
-  count: number;
-  seed?: number;
-}): FallenLog[] {
-  const rand = mulberry32(seed);
-  const logs: FallenLog[] = [];
-  let attempts = 0;
-
-  while (logs.length < count && attempts < count * 10) {
-    attempts++;
-    const angle = rand() * Math.PI * 2;
-    const distance = 5 + Math.sqrt(rand()) * 120;
-    const x = Math.cos(angle) * distance;
-    const z = Math.sin(angle) * distance;
-    if (shoreDistance(x, z) < 2) continue;
-    if (rand() > densityAt(x, z)) continue;
-
-    const length = 3 + rand() * 9;
-    logs.push({
-      x,
-      z,
-      y: terrainHeight(x, z) + 0.25,
-      length,
-      radius: 0.18 + rand() * 0.4,
-      rotation: rand() * Math.PI * 2,
-      tilt: (rand() - 0.5) * 0.25,
-    });
-  }
-
-  return logs;
-}
-
-/**
- * Cartes de feuillage d'une couronne.
- *
- * Une couronne est un *volume*, pas un disque posé sur un mât : les cartes sont
- * réparties du haut du fût jusqu'au sommet, avec un rayon qui varie, et l'une
- * d'elles est horizontale (le « toit » que l'on voit en levant la tête).
- * C'est ce qui distingue une canopée d'une série de parasols.
- */
 export interface CrownCard {
   offset: [number, number, number];
   /** Échelle horizontale de la carte. */
@@ -312,6 +165,37 @@ export interface CrownCard {
 export function crownCards(tree: Tree, random: () => number): CrownCard[] {
   const { crownScale, trunkHeight, kind, rotation } = tree;
   const cards: CrownCard[] = [];
+
+  if (kind === "sapling") {
+    // Arbuste de sous-bois : houppier large et bas, du sol jusqu'à la cime.
+    // C'est cette strate qui masque l'horizon à hauteur d'homme.
+    const height = trunkHeight + crownScale * 0.6;
+    // Trois plans à 60° plutôt que deux : les feuilles gardent leur taille
+    // au lieu d'être étirées sur toute la hauteur de l'arbuste.
+    for (let i = 0; i < 3; i++) {
+      cards.push({
+        offset: [
+          Math.cos(rotation + i * 2.09) * crownScale * 0.16,
+          height * (0.42 + i * 0.2),
+          Math.sin(rotation + i * 2.09) * crownScale * 0.16,
+        ],
+        width: crownScale * 2.2,
+        height: crownScale * 1.9,
+        horizontal: false,
+        angle: rotation + i * 2.09,
+        tilt: 0.24,
+      });
+    }
+    cards.push({
+      offset: [0, height * 0.92, 0],
+      width: crownScale * 2.8,
+      height: crownScale * 2.8,
+      horizontal: true,
+      angle: rotation + random() * Math.PI,
+      tilt: 0.22,
+    });
+    return cards;
+  }
 
   if (kind === "understory") {
     // Jeunes arbres : houppier bas mais étalé. Sans eux, la coupe verticale
@@ -397,4 +281,273 @@ export function forestStats(trees: Tree[]): {
     understory,
     coverage: Math.min(9.9, canopyArea / area),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Découpage en tuiles                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * La forêt est générée tuile par tuile autour du joueur.
+ *
+ * Une génération unique couvrant toute la carte diluait la végétation : à
+ * 4 200 arbres sur 520 × 520 unités, l'espacement moyen atteignait 8 unités
+ * et l'on voyait le sol nu partout. En ne générant que les tuiles proches
+ * (rayon utile avant le brouillard), on peut viser une vraie densité de forêt
+ * de terre ferme pour un coût de rendu constant.
+ */
+export const TILE_SIZE = 48;
+
+export function tileSeed(tileX: number, tileZ: number, seed = 20261101): number {
+  // Mélange des coordonnées : deux tuiles voisines ne partagent pas leur graine.
+  let h = seed ^ Math.imul(tileX, 0x27d4eb2d) ^ Math.imul(tileZ, 0x165667b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+export function tileKey(tileX: number, tileZ: number): string {
+  return `${tileX}:${tileZ}`;
+}
+
+/** Coordonnée de tuile contenant un point du monde. */
+export function tileOf(x: number, z: number): [number, number] {
+  return [Math.floor(x / TILE_SIZE), Math.floor(z / TILE_SIZE)];
+}
+
+/** Tuiles à charger pour couvrir un rayon autour du joueur. */
+export function tilesAround(x: number, z: number, radius: number): [number, number][] {
+  const [cx, cz] = tileOf(x, z);
+  const out: [number, number][] = [];
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      // On découpe le disque : les coins lointains sont hors du brouillard.
+      if (Math.hypot(dx, dz) > radius + 0.35) continue;
+      out.push([cx + dx, cz + dz]);
+    }
+  }
+  return out;
+}
+
+export interface TileOptions {
+  /** Densité d'arbres par unité carrée. */
+  treeDensity?: number;
+  /** Densité de plants de sous-bois par unité carrée. */
+  understoryDensity?: number;
+  /** Densité de troncs tombés par unité carrée. */
+  logDensity?: number;
+  /** Graine globale (monde). */
+  seed?: number;
+  /** Trouée de camp : aucun arbre ni plant dedans (le joueur doit pouvoir bouger). */
+  clearing?: { x: number; z: number; radius: number };
+}
+
+export interface Tile {
+  trees: Tree[];
+  understory: UnderstoryPlant[];
+  logs: FallenLog[];
+}
+
+/** Hauteur (en unités) d'un plant de sous-bois, à l'échelle 1. */
+const PLANT_HEIGHT = [1.0, 1.7, 1.5] as const;
+/** Largeur d'un plant par rapport à sa hauteur. */
+const PLANT_WIDTH = [1.45, 1.2, 1.35] as const;
+
+export interface PlantCard {
+  x: number;
+  y: number;
+  z: number;
+  width: number;
+  height: number;
+  angle: number;
+  /** Vrai pour une carte couchée au sol (couvre-sol, litière). */
+  flat: boolean;
+  /** Pente du terrain sous la carte (dérivées en X et Z), pour la coucher. */
+  slope?: [number, number];
+}
+
+/**
+ * Cartes de feuillage d'un plant, posées au sol. Deux plans croisés pour les
+ * plants en volume ; une seule grande carte à plat pour le couvre-sol, qui
+ * tapisse alors la litière. Partagé par le jeu et le rendu d'aperçu.
+ */
+export function plantCards(plant: UnderstoryPlant): PlantCard[] {
+  if (plant.variant === 3) {
+    // Couvre-sol : dalle de feuillage posée sur la terre, très légèrement
+    // inclinée pour éviter l'effet « autocollant » parfaitement plat.
+    const size = 1.4 + plant.scale * 1.3;
+    return [
+      {
+        x: plant.x,
+        y: plant.y + 0.07 + plant.scale * 0.05,
+        z: plant.z,
+        width: size,
+        height: size,
+        angle: plant.rotation,
+        flat: true,
+        // Sans cette pente, une dalle de 3 m déborde ou s'enfonce sur les versants.
+        slope: [
+          (terrainHeight(plant.x + 0.7, plant.z) - terrainHeight(plant.x - 0.7, plant.z)) / 1.4,
+          (terrainHeight(plant.x, plant.z + 0.7) - terrainHeight(plant.x, plant.z - 0.7)) / 1.4,
+        ],
+      },
+    ];
+  }
+
+  const height = PLANT_HEIGHT[plant.variant] * plant.scale;
+  const width = PLANT_WIDTH[plant.variant] * height;
+  return [0, 1].map((k) => ({
+    x: plant.x,
+    // Le bas de la carte repose sur le terrain, avec un léger enfoncement.
+    y: plant.y + height * 0.46,
+    z: plant.z,
+    width,
+    height,
+    angle: plant.rotation + k * (Math.PI / 2),
+    flat: false,
+  }));
+}
+
+export interface TileOptions {
+  /** Densité d'arbres par unité carrée. */
+  treeDensity?: number;
+  /** Densité de plants de sous-bois par unité carrée. */
+  understoryDensity?: number;
+  /** Densité de troncs tombés par unité carrée. */
+  logDensity?: number;
+  /** Graine globale (monde). */
+  seed?: number;
+  /** Trouée de camp : aucun arbre ni plant dedans (le joueur doit pouvoir bouger). */
+  clearing?: { x: number; z: number; radius: number };
+}
+
+/** Construit une tuile : arbres, sous-bois et troncs tombés. */
+export function buildTile(tileX: number, tileZ: number, options: TileOptions = {}): Tile {
+  const {
+    treeDensity = 0.055,
+    understoryDensity = 0.42,
+    logDensity = 0.0025,
+    seed = 20261101,
+    clearing,
+  } = options;
+
+  const inClearing = (x: number, z: number, margin = 0) =>
+    clearing ? Math.hypot(x - clearing.x, z - clearing.z) < clearing.radius + margin : false;
+
+  const rand = mulberry32(tileSeed(tileX, tileZ, seed));
+  const originX = tileX * TILE_SIZE;
+  const originZ = tileZ * TILE_SIZE;
+  const area = TILE_SIZE * TILE_SIZE;
+
+  const trees: Tree[] = [];
+  const occupancy = new Occupancy(6);
+
+  // --- arbres : on tire plus de candidats que nécessaire, la densité de zone
+  // filtre ensuite (baïs et marais restent ouverts).
+  const treeAttempts = Math.round(area * treeDensity * 2.6);
+  for (let i = 0; i < treeAttempts; i++) {
+    const x = originX + rand() * TILE_SIZE;
+    const z = originZ + rand() * TILE_SIZE;
+    if (inClearing(x, z, 4)) continue;
+    if (!acceptPoint(x, z, rand, { minShore: 3, maxSlope: 0.6 })) continue;
+
+    const roll = rand();
+    const kind: TreeKind =
+      roll < 0.08 ? "emergent" : roll < 0.34 ? "mid" : roll < 0.7 ? "understory" : "sapling";
+    const trunkRadius =
+      kind === "emergent"
+        ? 0.6 + rand() * 0.5
+        : kind === "mid"
+          ? 0.3 + rand() * 0.28
+          : kind === "understory"
+            ? 0.12 + rand() * 0.16
+            : 0.06 + rand() * 0.08;
+    const footprint = trunkRadius * 2.6 + 1.1;
+    if (!occupancy.tryAdd(x, z, footprint)) continue;
+
+    const y = terrainHeight(x, z);
+    const trunkHeight =
+      kind === "emergent"
+        ? 22 + rand() * 10
+        : kind === "mid"
+          ? 11 + rand() * 8
+          : kind === "understory"
+            ? 6 + rand() * 6
+            : 2.2 + rand() * 3.2;
+    const crownScale =
+      kind === "emergent"
+        ? 8 + rand() * 4
+        : kind === "mid"
+          ? 6 + rand() * 3
+          : kind === "understory"
+            ? 2.6 + rand() * 1.6
+            : 0.85 + rand() * 0.75;
+
+    trees.push({
+      x,
+      z,
+      y,
+      trunkHeight,
+      trunkRadius,
+      kind,
+      crownScale,
+      crownCards: kind === "understory" ? 2 : 3,
+      rotation: rand() * Math.PI * 2,
+      tint: Math.floor(rand() * 6),
+      lean: [(rand() - 0.5) * 0.1, (rand() - 0.5) * 0.1],
+    });
+  }
+
+  // --- sous-bois
+  const understory: UnderstoryPlant[] = [];
+  const plantAttempts = Math.round(area * understoryDensity * 1.8);
+  for (let i = 0; i < plantAttempts; i++) {
+    const x = originX + rand() * TILE_SIZE;
+    const z = originZ + rand() * TILE_SIZE;
+    if (shoreDistance(x, z) < 0.8) continue;
+    if (slopeAt(x, z) > 0.95) continue;
+    if (rand() > densityAt(x, z) * 1.15) continue;
+
+    // Dans la trouée du camp, seules les herbes basses poussent : le sol reste
+    // praticable, mais il n'est jamais nu.
+    const roll = rand();
+    const variant: 0 | 1 | 2 | 3 = inClearing(x, z, 2) ? 3 : roll < 0.62 ? 3 : roll < 0.82 ? 0 : roll < 0.94 ? 1 : 2;
+    understory.push({
+      x,
+      z,
+      y: terrainHeight(x, z),
+      scale:
+        variant === 3
+          ? 0.35 + rand() * 0.85
+          : variant === 1
+            ? 0.7 + rand() * 0.5
+            : variant === 2
+              ? 0.7 + rand() * 0.6
+              : 0.6 + rand() * 1.0,
+      rotation: rand() * Math.PI * 2,
+      variant,
+    });
+  }
+
+  // --- troncs tombés
+  const logs: FallenLog[] = [];
+  const logAttempts = Math.max(1, Math.round(area * logDensity * 3));
+  for (let i = 0; i < logAttempts; i++) {
+    const x = originX + rand() * TILE_SIZE;
+    const z = originZ + rand() * TILE_SIZE;
+    if (inClearing(x, z)) continue;
+    if (shoreDistance(x, z) < 2) continue;
+    if (rand() > densityAt(x, z)) continue;
+    logs.push({
+      x,
+      z,
+      y: terrainHeight(x, z) + 0.25,
+      length: 3 + rand() * 9,
+      radius: 0.18 + rand() * 0.4,
+      rotation: rand() * Math.PI * 2,
+      tilt: (rand() - 0.5) * 0.25,
+    });
+  }
+
+  return { trees, understory, logs };
 }

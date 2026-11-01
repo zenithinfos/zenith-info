@@ -155,29 +155,44 @@ La forêt est générée par des modules purs, testables sans navigateur :
 
 Principes de rendu :
 
-- **Trois strates** : canopée (émergents 20–29 m, arbres moyens 10–17 m, jeunes
-  5–10 m), sous-bois (balisiers, buissons, fougères) et sol (litière, troncs tombés).
+- **Tuilage** : la forêt est découpée en tuiles de 48 unités (`buildTile`). Le jeu
+  charge celles qui entourent le joueur (rayon 2 tuiles, soit 96 unités — la
+  portée du brouillard) et libère les autres en marchant. Une tuile de plus par
+  image : pas de saccade. Tout le monde n'est donc plus généré autour de
+  l'origine, ce qui laissait le reste de la carte vide.
+- **Quatre strates** : émergents (22–32 m), arbres moyens (11–19 m), jeunes
+  arbres (6–12 m) et **arbustes de sous-bois** (2–5 m) qui bouchent la vue à
+  hauteur d'homme — sans eux, on voyait le ciel entre les troncs.
 - **Houppiers en volume** : cartes de feuillage empilées sur les deux tiers
-  supérieurs du fût, plus une carte horizontale en « toit ». Une couronne n'est
-  jamais un disque posé sur un mât.
+  supérieurs du fût, plus une carte horizontale en « toit ».
+- **Sous-bois** : fougères et balisiers en deux plans croisés, plus un
+  **couvre-sol à plat** (dalles de litière de 2–5 m) qui tapisse le sol.
+  Les cartes basses sont assombries (occlusion verticale) pour donner la
+  profondeur du sous-bois.
 - **Feuillages alpha-testés** : silhouettes découpées, et Three projette de
   vraies ombres feuillues (le depth material reprend `alphaTest`).
+- **Ciel en dôme** : bleu au zénith, lavé par la brume à l'horizon. Un fond uni
+  laissait une bande de ciel claire entre les troncs, à hauteur d'œil.
 - **Plafond de canopée** + brouillard : on ne voit jamais le ciel depuis le
   sentier, sauf dans les baïs — vérifié par `npm run check:forest`.
 - **Vent** : léger balancement dans le vertex shader, avec une clé de cache de
   programme par matériau.
-- Sol assombri sous la canopée dense (couleurs par sommet), rais de lumière
-  additifs, vignettage.
+- Sol assombri sous la canopée dense, rais de lumière additifs, vignettage.
 
-Densités mesurées (desktop, 4 200 arbres) :
+Densités mesurées autour du joueur (`npm run check:forest`) :
 
 | Sonde | Ciel visible |
 |---|---|
-| Camp de base | 13 % |
-| Sentier | 2 % |
+| Camp de base | 14 % |
+| Sentier | 0 % |
 | Forêt profonde | 0 % |
-| Baï (clairière) | 53 % |
+| Baï (clairière) | 43 % |
 | Colline | 0,4 % |
+| Canopée | 0 % |
+
+Le rendu se vérifie aussi à l'œil, hors navigateur : `npm run preview:scene`
+écrit quatre PNG (`preview-{spawn,foret,sentier,clairiere}.png`) depuis un
+raycaster logiciel qui partage `buildTile` et `plantCards` avec le jeu.
 
 ## Assets
 

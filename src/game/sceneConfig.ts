@@ -47,7 +47,7 @@ export const FOREST_PALETTE = {
   skyDay: 0x9fc4d8,
   skyDusk: 0xd98a56,
   skyNight: 0x0a1420,
-  fogDay: 0x6f8c6a,
+  fogDay: 0x5f7d64,
   fogNight: 0x0b1512,
   sun: 0xffe9c4,
   moon: 0x9fb4d0,
@@ -154,7 +154,7 @@ export function qualityBudget(
   if (reducedMotion) {
     return {
       trees: 900,
-      understory: 500,
+      understory: 2600,
       ferns: 600,
       rocks: 40,
       logs: 20,
@@ -167,7 +167,7 @@ export function qualityBudget(
   if (isMobile) {
     return {
       trees: 1700,
-      understory: 900,
+      understory: 5000,
       ferns: 1000,
       rocks: 70,
       logs: 40,
@@ -179,7 +179,7 @@ export function qualityBudget(
   }
   return {
     trees: 4200,
-    understory: 2200,
+    understory: 11000,
     ferns: 1800,
     rocks: 160,
     logs: 90,

@@ -13,7 +13,8 @@
     "package": "node scripts/package-downloads.mjs",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "check:forest": "node scripts/check-forest.mjs"
+    "check:forest": "node scripts/check-forest.mjs",
+    "preview:scene": "node scripts/preview-scene.mjs --size 480x270 --out ./preview"
   },
   "dependencies": {
     "drizzle-orm": "0.45.4",

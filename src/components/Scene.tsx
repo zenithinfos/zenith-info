@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import type { Weather } from "@/game/realism";
 import {
-  FOLIAGE_TINTS,
   FOREST_PALETTE,
   SCENE_CONFIG,
   TEXTURES,
@@ -13,12 +12,16 @@ import {
 import { WATER_BODIES, rainParams } from "@/game/water";
 import { ZONES } from "@/game/levels";
 import {
+  buildTile,
+  plantCards,
   crownCards,
   densityAt,
-  generateForest,
-  generateLogs,
-  generateUnderstory,
   mulberry32,
+  tileKey,
+  tileOf,
+  tileSeed,
+  tilesAround,
+  type TileOptions,
 } from "@/game/forest";
 import { terrainHeight } from "@/game/terrain";
 
@@ -69,8 +72,15 @@ export interface SceneProps {
   className?: string;
 }
 
-/** Rayon de la trouée laissée autour du point de départ. */
+/**
+ * Rayon de chargement, en tuiles. 2 tuiles de 48 unités couvrent 96 unités,
+ * soit la portée utile avant le brouillard (au-delà, on ne verrait rien).
+ */
+/** Rayon de la trouée laissée autour du point de départ (camp). */
 const SPAWN_CLEARING = 7;
+
+const TILE_RADIUS_DESKTOP = 2;
+const TILE_RADIUS_MOBILE = 1;
 
 /**
  * Texture de rai de lumière : dégradé doux, transparent sur les bords.
@@ -149,8 +159,46 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(SCENE_CONFIG.background);
     scene.fog = new THREE.Fog(SCENE_CONFIG.fog.color, 8, 110);
+
+    // Ciel en dôme : bleu au zénith, mais lavé par la brume à l'horizon. Un
+    // fond uni laissait une bande de ciel claire entre les troncs, à hauteur
+    // d'homme — ce qui trahit immédiatement le décor.
+    const skyGeometry = new THREE.SphereGeometry(320, 24, 16);
+    const skyMaterial = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        uTop: { value: new THREE.Color(SCENE_CONFIG.background) },
+        uHorizon: { value: new THREE.Color(SCENE_CONFIG.fog.color) },
+        uBottom: { value: new THREE.Color(FOREST_PALETTE.canopy) },
+      },
+      vertexShader: `
+        varying float vHeight;
+        void main() {
+          vHeight = normalize(position).y;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uTop;
+        uniform vec3 uHorizon;
+        uniform vec3 uBottom;
+        varying float vHeight;
+        void main() {
+          float h = vHeight;
+          vec3 colour = h > 0.0
+            ? mix(uHorizon, uTop, pow(clamp(h, 0.0, 1.0), 0.65))
+            : mix(uHorizon, uBottom, clamp(-h * 3.0, 0.0, 1.0));
+          gl_FragColor = vec4(colour, 1.0);
+        }
+      `,
+    });
+    const skyDome = new THREE.Mesh(skyGeometry, skyMaterial);
+    skyDome.frustumCulled = false;
+    skyDome.renderOrder = -1;
+    scene.add(skyDome);
 
     const camera = new THREE.PerspectiveCamera(
       SCENE_CONFIG.camera.fov,
@@ -335,21 +383,17 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     };
 
     // ------------------------------------------------------------------
-    // Forêt
+    // Forêt — chargée par tuiles autour du joueur
     // ------------------------------------------------------------------
-    const trees = generateForest({
-      treeCount: budget.trees,
-      seed: 20261101,
-      clearingRadius: SPAWN_CLEARING,
-    });
-    const understory = generateUnderstory({
-      count: budget.understory,
-      seed: 4242,
-      clearingRadius: SPAWN_CLEARING - 3,
-    });
-    const logs = generateLogs({ count: budget.logs, seed: 909 });
+    const TILE_RADIUS = isMobile || reduced ? TILE_RADIUS_MOBILE : TILE_RADIUS_DESKTOP;
+    const TILE_OPTIONS: TileOptions = {
+      treeDensity: isMobile || reduced ? 0.042 : 0.058,
+      understoryDensity: isMobile || reduced ? 0.3 : 0.46,
+      logDensity: 0.0025,
+      clearing: { x: 0, z: 6, radius: SPAWN_CLEARING },
+    };
 
-    // --- Fûts ---------------------------------------------------------
+    // Géométries et matériaux partagés par toutes les tuiles.
     const trunkGeometry = new THREE.CylinderGeometry(0.62, 1, 1, 7, 2, true);
     trunkGeometry.translate(0, 0.5, 0);
     const trunkMaterial = new THREE.MeshStandardMaterial({
@@ -363,111 +407,264 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       trunkMaterial.needsUpdate = true;
     });
 
-    const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, trees.length);
-    trunkMesh.castShadow = true;
-    trunkMesh.receiveShadow = true;
-
-    // Contreforts / empattement des grands arbres.
     const buttressGeometry = new THREE.CylinderGeometry(0.85, 1.35, 1, 7, 1, true);
     buttressGeometry.translate(0, 0.5, 0);
-    const buttressMesh = new THREE.InstancedMesh(
-      buttressGeometry,
-      trunkMaterial,
-      trees.filter((tree) => tree.kind !== "understory").length,
-    );
-    buttressMesh.castShadow = true;
-    buttressMesh.receiveShadow = true;
 
-    const dummy = new THREE.Object3D();
-    const tintColor = new THREE.Color();
-
-    let trunkIndex = 0;
-    let buttressIndex = 0;
-    for (const tree of trees) {
-      dummy.position.set(tree.x, tree.y - 0.3, tree.z);
-      dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1]);
-      dummy.scale.set(tree.trunkRadius, tree.trunkHeight, tree.trunkRadius);
-      dummy.updateMatrix();
-      trunkMesh.setMatrixAt(trunkIndex, dummy.matrix);
-      // Écorce : les vieux arbres sont plus sombres.
-      tintColor.setHex(0xffffff).multiplyScalar(
-        tree.kind === "emergent" ? 0.78 : tree.kind === "mid" ? 0.92 : 1,
-      );
-      trunkMesh.setColorAt(trunkIndex, tintColor);
-      trunkIndex += 1;
-
-      if (tree.kind !== "understory") {
-        const height = tree.kind === "emergent" ? tree.trunkHeight * 0.32 : tree.trunkHeight * 0.24;
-        dummy.position.set(tree.x, tree.y - 0.35, tree.z);
-        dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1]);
-        dummy.scale.set(tree.trunkRadius * 2.1, height, tree.trunkRadius * 2.1);
-        dummy.updateMatrix();
-        buttressMesh.setMatrixAt(buttressIndex, dummy.matrix);
-        buttressIndex += 1;
-      }
-    }
-    trunkMesh.count = trunkIndex;
-    buttressMesh.count = buttressIndex;
-    trunkMesh.instanceMatrix.needsUpdate = true;
-    buttressMesh.instanceMatrix.needsUpdate = true;
-    if (trunkMesh.instanceColor) trunkMesh.instanceColor.needsUpdate = true;
-    scene.add(trunkMesh, buttressMesh);
-
-    // --- Cartes de feuillage ------------------------------------------
     const cardGeometry = new THREE.PlaneGeometry(1, 1);
+    const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
+    const logMaterial = new THREE.MeshStandardMaterial({ color: 0x3b2d1f, roughness: 0.95 });
+    loadTexture(TEXTURES.bark, (texture) => {
+      texture.repeat.set(1, 2);
+      logMaterial.map = texture;
+      logMaterial.needsUpdate = true;
+    });
 
-    // Trois familles de feuillage : on alterne pour casser la répétition.
     const foliageMaterials = [
       foliageMaterial(TEXTURES.foliage, { tint: 0xdfe8d2, sway: 0.07 }),
       foliageMaterial(TEXTURES.foliageDeep, { tint: 0xa8bb9a, sway: 0.05 }),
       foliageMaterial(TEXTURES.foliagePale, { tint: 0xeaf2dd, sway: 0.09 }),
     ];
 
-    const cards: { matrix: THREE.Matrix4; colour: THREE.Color; family: number }[] = [];
-    for (const tree of trees) {
-      for (const card of crownCards(tree, random)) {
-        dummy.position.set(
-          tree.x + card.offset[0],
-          tree.y + card.offset[1],
-          tree.z + card.offset[2],
-        );
-        if (card.horizontal) {
-          dummy.rotation.set(-Math.PI / 2 + (random() - 0.5) * card.tilt, card.angle, 0);
-        } else {
-          dummy.rotation.set((random() - 0.5) * card.tilt, card.angle, (random() - 0.5) * card.tilt);
-        }
-        dummy.scale.set(card.width, card.height, 1);
-        dummy.updateMatrix();
-        cards.push({
-          matrix: dummy.matrix.clone(),
-          colour: new THREE.Color(
-            FOLIAGE_TINTS[Math.floor(random() * FOLIAGE_TINTS.length)],
-          ).multiplyScalar(0.85 + random() * 0.3),
-          family: Math.floor(random() * 3),
-        });
-      }
-    }
+    const understoryMaterials = {
+      fern: foliageMaterial(TEXTURES.fern, { sway: 0.04, alphaTest: 0.38 }),
+      bigleaf: foliageMaterial(TEXTURES.bigleaf, { sway: 0.05, alphaTest: 0.4 }),
+      bush: foliageMaterial(TEXTURES.foliage, { tint: 0xb9c9a8, sway: 0.1, alphaTest: 0.44 }),
+      cover: foliageMaterial(TEXTURES.foliagePale, { tint: 0xa9bd94, sway: 0.06, alphaTest: 0.46 }),
+    };
 
-    // Une InstancedMesh par famille ; la taille de chaque famille est calculée
-    // exactement (les instances non remplies s'empileraient à l'origine).
-    for (let family = 0; family < 3; family++) {
-      const subset = cards.filter((card) => card.family === family);
-      if (subset.length === 0) continue;
-      const mesh = new THREE.InstancedMesh(cardGeometry, foliageMaterials[family], subset.length);
-      subset.forEach((card, index) => {
-        mesh.setMatrixAt(index, card.matrix);
-        mesh.setColorAt(index, card.colour);
+    const dummy = new THREE.Object3D();
+    // Repères réutilisés pour coucher les dalles de couvre-sol sur la pente.
+    const flatNormal = new THREE.Vector3();
+    const flatRight = new THREE.Vector3();
+    const flatUp = new THREE.Vector3();
+    const flatBasis = new THREE.Matrix4();
+    const tintColor = new THREE.Color();
+    const FOLIAGE_PALETTE = [0x6f9a58, 0x5c8a4c, 0x4e7a44, 0x7aa35f, 0x466e3e, 0x8ab06a];
+
+    /** Construit les maillages d'une tuile (géométries partagées, instances propres). */
+    const buildTileMeshes = (tileX: number, tileZ: number): THREE.Group => {
+      const group = new THREE.Group();
+      const tile = buildTile(tileX, tileZ, TILE_OPTIONS);
+      const tileRand = mulberry32(tileSeed(tileX, tileZ));
+
+      // --- fûts et contreforts
+      if (tile.trees.length > 0) {
+        const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, tile.trees.length);
+        const buttress = new THREE.InstancedMesh(buttressGeometry, trunkMaterial, tile.trees.length);
+        let buttressCount = 0;
+
+        tile.trees.forEach((tree, index) => {
+          dummy.position.set(tree.x, tree.y - 0.3, tree.z);
+          dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1], "YXZ");
+          dummy.scale.set(tree.trunkRadius, tree.trunkHeight, tree.trunkRadius);
+          dummy.updateMatrix();
+          trunks.setMatrixAt(index, dummy.matrix);
+          tintColor
+            .setHex(0xffffff)
+            .multiplyScalar(tree.kind === "emergent" ? 0.78 : tree.kind === "mid" ? 0.92 : 1);
+          trunks.setColorAt(index, tintColor);
+
+          if (tree.kind === "emergent" || tree.kind === "mid") {
+            const height = tree.kind === "emergent" ? tree.trunkHeight * 0.3 : tree.trunkHeight * 0.22;
+            dummy.position.set(tree.x, tree.y - 0.35, tree.z);
+            dummy.rotation.set(tree.lean[0], tree.rotation, tree.lean[1], "YXZ");
+            dummy.scale.set(tree.trunkRadius * 2, height, tree.trunkRadius * 2);
+            dummy.updateMatrix();
+            buttress.setMatrixAt(buttressCount++, dummy.matrix);
+          }
+        });
+
+        buttress.count = buttressCount;
+        trunks.instanceMatrix.needsUpdate = true;
+        buttress.instanceMatrix.needsUpdate = true;
+        if (trunks.instanceColor) trunks.instanceColor.needsUpdate = true;
+        trunks.castShadow = true;
+        trunks.receiveShadow = true;
+        buttress.castShadow = true;
+        group.add(trunks, buttress);
+      }
+
+      // --- cartes de feuillage, réparties en trois familles
+      const families: { matrix: THREE.Matrix4; colour: THREE.Color }[][] = [[], [], []];
+      for (const tree of tile.trees) {
+        for (const card of crownCards(tree, tileRand)) {
+          dummy.position.set(
+            tree.x + card.offset[0],
+            tree.y + card.offset[1],
+            tree.z + card.offset[2],
+          );
+          if (card.horizontal) {
+            dummy.rotation.set(
+              -Math.PI / 2 + (tileRand() - 0.5) * card.tilt,
+              card.angle,
+              0,
+              "YXZ",
+            );
+          } else {
+            dummy.rotation.set(
+              (tileRand() - 0.5) * card.tilt,
+              card.angle,
+              (tileRand() - 0.5) * card.tilt,
+              "YXZ",
+            );
+          }
+          dummy.scale.set(card.width, card.height, 1);
+          dummy.updateMatrix();
+          // Occlusion verticale : plus on est bas, plus on est à l'ombre du
+          // couvert. C'est ce dégradé qui donne la profondeur d'une forêt.
+          const ao = 0.55 + 0.45 * Math.min(1, (card.offset[1] + tree.trunkHeight * 0.4) / 14);
+          families[Math.floor(tileRand() * 3)].push({
+            matrix: dummy.matrix.clone(),
+            colour: new THREE.Color(
+              FOLIAGE_PALETTE[Math.floor(tileRand() * FOLIAGE_PALETTE.length)],
+            ).multiplyScalar((0.85 + tileRand() * 0.3) * ao),
+          });
+        }
+      }
+
+      families.forEach((items, family) => {
+        if (items.length === 0) return;
+        const mesh = new THREE.InstancedMesh(cardGeometry, foliageMaterials[family], items.length);
+        items.forEach((item, index) => {
+          mesh.setMatrixAt(index, item.matrix);
+          mesh.setColorAt(index, item.colour);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
       });
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.frustumCulled = false;
-      scene.add(mesh);
-    }
+
+      // --- sous-bois
+      const plantGroups: Record<string, { matrix: THREE.Matrix4; colour: THREE.Color }[]> = {
+        fern: [],
+        bigleaf: [],
+        bush: [],
+        cover: [],
+      };
+      for (const plant of tile.understory) {
+        const key =
+          plant.variant === 1 ? "bigleaf" : plant.variant === 2 ? "bush" : plant.variant === 3 ? "cover" : "fern";
+        for (const card of plantCards(plant)) {
+          dummy.position.set(card.x, card.y, card.z);
+          if (card.flat && card.slope) {
+            // On couche la dalle sur le versant : base orthonormée construite
+            // à partir de la normale du terrain.
+            const [gx, gz] = card.slope;
+            flatNormal.set(-gx, 1, -gz).normalize();
+            flatRight.set(Math.cos(card.angle), 0, -Math.sin(card.angle));
+            flatRight.addScaledVector(flatNormal, -flatRight.dot(flatNormal)).normalize();
+            flatUp.crossVectors(flatNormal, flatRight).normalize();
+            flatBasis.makeBasis(flatRight, flatUp, flatNormal);
+            dummy.quaternion.setFromRotationMatrix(flatBasis);
+          } else {
+            dummy.rotation.set(0, card.angle, 0, "YXZ");
+          }
+          dummy.scale.set(card.width, card.height, 1);
+          dummy.updateMatrix();
+          // Le couvre-sol est une litière : plus sombre, moins saturé.
+          const shade = card.flat ? 0.42 + tileRand() * 0.22 : 0.6 + tileRand() * 0.3;
+          plantGroups[key].push({
+            matrix: dummy.matrix.clone(),
+            colour: new THREE.Color(
+              FOLIAGE_PALETTE[Math.floor(tileRand() * FOLIAGE_PALETTE.length)],
+            ).multiplyScalar(shade),
+          });
+        }
+      }
+
+      for (const [key, items] of Object.entries(plantGroups)) {
+        if (items.length === 0) continue;
+        const mesh = new THREE.InstancedMesh(
+          cardGeometry,
+          understoryMaterials[key as keyof typeof understoryMaterials],
+          items.length,
+        );
+        items.forEach((item, index) => {
+          mesh.setMatrixAt(index, item.matrix);
+          mesh.setColorAt(index, item.colour);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+
+      // --- troncs tombés
+      if (tile.logs.length > 0) {
+        const logs = new THREE.InstancedMesh(logGeometry, logMaterial, tile.logs.length);
+        tile.logs.forEach((log, index) => {
+          dummy.position.set(log.x, log.y, log.z);
+          dummy.rotation.set(Math.PI / 2 + log.tilt, log.rotation, 0, "YXZ");
+          dummy.scale.set(log.radius, log.length, log.radius);
+          dummy.updateMatrix();
+          logs.setMatrixAt(index, dummy.matrix);
+        });
+        logs.instanceMatrix.needsUpdate = true;
+        logs.castShadow = true;
+        logs.receiveShadow = true;
+        group.add(logs);
+      }
+
+      return group;
+    };
+
+    const tileGroup = new THREE.Group();
+    scene.add(tileGroup);
+    const loadedTiles = new Map<string, THREE.Group>();
+    let currentTile: [number, number] | null = null;
+
+    /** Tuiles en attente de construction (étalées sur plusieurs images). */
+    let pendingTiles: [number, number][] = [];
+
+    /** Charge les tuiles proches, libère les lointaines. */
+    const updateTiles = (x: number, z: number, force = false) => {
+      const [cx, cz] = tileOf(x, z);
+      if (!force && currentTile && currentTile[0] === cx && currentTile[1] === cz) return;
+      currentTile = [cx, cz];
+
+      const wanted = new Set<string>();
+      const list = tilesAround(x, z, TILE_RADIUS);
+      for (const [tx, tz] of list) wanted.add(tileKey(tx, tz));
+
+      for (const [key, group] of loadedTiles) {
+        if (wanted.has(key)) continue;
+        tileGroup.remove(group);
+        group.traverse((child) => {
+          if (child instanceof THREE.InstancedMesh) child.dispose();
+        });
+        loadedTiles.delete(key);
+      }
+
+      // Les plus proches d'abord : le joueur voit vite son entourage immédiat.
+      pendingTiles = list
+        .filter(([tx, tz]) => !loadedTiles.has(tileKey(tx, tz)))
+        .sort(
+          (a, b) =>
+            Math.hypot(a[0] - cx, a[1] - cz) - Math.hypot(b[0] - cx, b[1] - cz),
+        );
+    };
+
+    /** Construit au plus une tuile par image : pas de saccade en marchant. */
+    const buildPendingTile = () => {
+      const next = pendingTiles.shift();
+      if (!next) return;
+      const [tx, tz] = next;
+      const key = tileKey(tx, tz);
+      if (loadedTiles.has(key)) return;
+      const group = buildTileMeshes(tx, tz);
+      tileGroup.add(group);
+      loadedTiles.set(key, group);
+    };
+
+    updateTiles(0, 6, true);
+    // Les premières tuiles sont construites tout de suite : la scène doit être
+    // pleine dès la première image, pas se remplir sous les yeux du joueur.
+    while (pendingTiles.length > 0) buildPendingTile();
 
     // --- Plafond de canopée -------------------------------------------
-    // Quelques grandes nappes au-dessus de la scène : elles bouchent le ciel
+    // Grandes nappes suspendues au-dessus du joueur : elles bouchent le ciel
     // et donnent ce vert « sous la tente » propre aux forêts de terre ferme.
     const ceilingGroup = new THREE.Group();
     const ceilingMaterial = foliageMaterial(TEXTURES.canopy, {
@@ -476,98 +673,33 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       alphaTest: 0.36,
     });
     const ceilingGeometry = new THREE.PlaneGeometry(1, 1);
-    const ceilingCount = isMobile || reduced ? 24 : 52;
+    const ceilingCount = isMobile || reduced ? 26 : 56;
     const ceilingMesh = new THREE.InstancedMesh(ceilingGeometry, ceilingMaterial, ceilingCount);
     ceilingMesh.frustumCulled = false;
     for (let i = 0; i < ceilingCount; i++) {
       const angle = random() * Math.PI * 2;
-      const distance = Math.sqrt(random()) * 230;
+      const distance = Math.sqrt(random()) * 105;
       const x = Math.cos(angle) * distance;
       const z = Math.sin(angle) * distance;
-      dummy.position.set(x, 26 + random() * 12, z);
-      dummy.rotation.set(-Math.PI / 2 + (random() - 0.5) * 0.12, random() * Math.PI, 0);
-      dummy.scale.setScalar(58 + random() * 52);
+      dummy.position.set(x, 24 + random() * 14, z);
+      dummy.rotation.set(
+        -Math.PI / 2 + (random() - 0.5) * 0.14,
+        random() * Math.PI,
+        0,
+        "YXZ",
+      );
+      dummy.scale.setScalar(44 + random() * 40);
       dummy.updateMatrix();
       ceilingMesh.setMatrixAt(i, dummy.matrix);
       tintColor.setRGB(0.62 + random() * 0.18, 0.72 + random() * 0.16, 0.55 + random() * 0.16);
       ceilingMesh.setColorAt(i, tintColor);
     }
     ceilingMesh.instanceMatrix.needsUpdate = true;
+    if (ceilingMesh.instanceColor) ceilingMesh.instanceColor.needsUpdate = true;
+    ceilingMesh.receiveShadow = true;
     ceilingGroup.add(ceilingMesh);
     scene.add(ceilingGroup);
 
-    // --- Sous-bois -----------------------------------------------------
-    const bigleafMaterial = foliageMaterial(TEXTURES.bigleaf, { sway: 0.05, alphaTest: 0.4 });
-    const fernMaterial = foliageMaterial(TEXTURES.fern, { sway: 0.04, alphaTest: 0.38 });
-
-    const bigleafMesh = new THREE.InstancedMesh(
-      cardGeometry,
-      bigleafMaterial,
-      understory.filter((p) => p.variant === 1).length,
-    );
-    const fernMesh = new THREE.InstancedMesh(
-      cardGeometry,
-      fernMaterial,
-      understory.filter((p) => p.variant !== 1).length,
-    );
-    const bushMesh = new THREE.InstancedMesh(
-      cardGeometry,
-      foliageMaterial(TEXTURES.foliage, { tint: 0xb9c9a8, sway: 0.1, alphaTest: 0.44 }),
-      understory.filter((p) => p.variant === 2).length,
-    );
-
-    let bigleafIndex = 0;
-    let fernIndex = 0;
-    let bushIndex = 0;
-    for (const plant of understory) {
-      const height = plant.variant === 1 ? 1.05 : plant.variant === 2 ? 1.3 : 0.8;
-      dummy.position.set(plant.x, plant.y + height * 0.5 * plant.scale, plant.z);
-      dummy.rotation.set(0, plant.rotation, 0);
-      dummy.scale.set(plant.scale * (plant.variant === 1 ? 1.9 : 1.35), plant.scale * height * 1.6, 1);
-      dummy.updateMatrix();
-
-      if (plant.variant === 1 && bigleafIndex < bigleafMesh.count) {
-        bigleafMesh.setMatrixAt(bigleafIndex++, dummy.matrix);
-      } else if (plant.variant === 2 && bushIndex < bushMesh.count) {
-        bushMesh.setMatrixAt(bushIndex++, dummy.matrix);
-      } else if (fernIndex < fernMesh.count) {
-        fernMesh.setMatrixAt(fernIndex++, dummy.matrix);
-      }
-    }
-    bigleafMesh.count = bigleafIndex;
-    fernMesh.count = fernIndex;
-    bushMesh.count = bushIndex;
-    for (const mesh of [bigleafMesh, fernMesh, bushMesh]) {
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.receiveShadow = true;
-      mesh.castShadow = false;
-      mesh.frustumCulled = false;
-      scene.add(mesh);
-    }
-
-    // --- Troncs tombés --------------------------------------------------
-    const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
-    const logMaterial = new THREE.MeshStandardMaterial({
-      color: 0x3b2d1f,
-      roughness: 0.95,
-    });
-    loadTexture(TEXTURES.bark, (texture) => {
-      texture.repeat.set(1, 2);
-      logMaterial.map = texture;
-      logMaterial.needsUpdate = true;
-    });
-    const logMesh = new THREE.InstancedMesh(logGeometry, logMaterial, logs.length);
-    logs.forEach((log, index) => {
-      dummy.position.set(log.x, log.y, log.z);
-      dummy.rotation.set(Math.PI / 2 + log.tilt, log.rotation, 0);
-      dummy.scale.set(log.radius, log.length, log.radius);
-      dummy.updateMatrix();
-      logMesh.setMatrixAt(index, dummy.matrix);
-    });
-    logMesh.instanceMatrix.needsUpdate = true;
-    logMesh.castShadow = true;
-    logMesh.receiveShadow = true;
-    scene.add(logMesh);
 
     // --- Rochers -------------------------------------------------------
     const rockGeometry = new THREE.DodecahedronGeometry(1.1, 0);
@@ -626,6 +758,38 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       shafts.push(sprite);
       scene.add(sprite);
     }
+
+    // ------------------------------------------------------------------
+    // Brume de sous-bois
+    // ------------------------------------------------------------------
+    // Quelques nappes larges, accrochées à la caméra : elles séparent les plans
+    // de troncs et empêchent la forêt de ressembler à un décor de carton.
+    const mistGroup = new THREE.Group();
+    const mistSprites: THREE.Sprite[] = [];
+    const mistCount = isMobile || reduced ? 5 : 12;
+    for (let i = 0; i < mistCount; i++) {
+      const material = new THREE.SpriteMaterial({
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.0,
+        color: 0xdfe8dc,
+      });
+      const sprite = new THREE.Sprite(material);
+      const angle = (i / mistCount) * Math.PI * 2 + random() * 0.9;
+      const distance = 16 + random() * 46;
+      sprite.userData.offset = [Math.cos(angle) * distance, Math.sin(angle) * distance];
+      sprite.userData.baseOpacity = 0.1 + random() * 0.12;
+      sprite.scale.set(34 + random() * 30, 12 + random() * 10, 1);
+      mistSprites.push(sprite);
+      mistGroup.add(sprite);
+    }
+    loadTexture(TEXTURES.mist, (texture) => {
+      for (const sprite of mistSprites) {
+        (sprite.material as THREE.SpriteMaterial).map = texture;
+        (sprite.material as THREE.SpriteMaterial).needsUpdate = true;
+      }
+    });
+    scene.add(mistGroup);
 
     // ------------------------------------------------------------------
     // Eau
@@ -836,6 +1000,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       elapsed += dt;
       sharedTime.value = elapsed;
 
+      skyDome.position.set(camera.position.x, camera.position.y, camera.position.z);
+
+      // Tuiles de forêt : rechargées seulement au changement de tuile.
+      updateTiles(playerPosition.x, playerPosition.z);
+      buildPendingTile();
+      buildPendingTile();
+      ceilingGroup.position.set(playerPosition.x, 0, playerPosition.z);
+
       // Caméra : hauteur d'œil + ressenti de marche.
       const moving = currentMotion === "walk" || currentMotion === "run" || currentMotion === "sneak";
       bob += dt * (currentMotion === "run" ? 11 : 6);
@@ -892,6 +1064,18 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         fireflies.rotation.y = elapsed * 0.006;
       }
 
+      // Brume : elle suit le joueur, dérive lentement et s'épaissit à l'aube.
+      for (const sprite of mistSprites) {
+        const [ox, oz] = sprite.userData.offset as [number, number];
+        const drift = Math.sin(elapsed * 0.05 + ox) * 3;
+        sprite.position.set(camera.position.x + ox + drift, 1.5 + Math.sin(ox) * 1.2, camera.position.z + oz);
+        const material = sprite.material as THREE.SpriteMaterial;
+        material.opacity =
+          (sprite.userData.baseOpacity as number) *
+          (0.45 + (1 - daylight) * 0.55) *
+          (0.8 + Math.sin(elapsed * 0.11 + oz) * 0.2);
+      }
+
       // Rais de lumière : ils suivent le joueur et respirent doucement.
       for (const shaft of shafts) {
         const [ox, oz] = shaft.userData.offset as [number, number];
@@ -942,7 +1126,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         const sky = new THREE.Color(
           value > 0.55 ? FOREST_PALETTE.skyDay : value > 0.15 ? FOREST_PALETTE.skyDusk : FOREST_PALETTE.skyNight,
         );
-        if (scene.background instanceof THREE.Color) scene.background.lerp(sky, 0.08);
+        (skyMaterial.uniforms.uTop.value as THREE.Color).lerp(sky, 0.08);
+        (skyMaterial.uniforms.uHorizon.value as THREE.Color).lerp(fog.color, 0.5);
 
         sun.intensity = 0.04 + value * 1.6;
         ambient.intensity = 0.18 + value * 0.32;
@@ -1002,7 +1187,19 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         renderer.domElement.requestPointerLock?.();
       },
       getStats() {
-        return { trees: trees.length, understory: understory.length, logs: logs.length };
+        let trees = 0;
+        let understory = 0;
+        let logs = 0;
+        const plants = new Set<THREE.Material>(Object.values(understoryMaterials));
+        for (const group of loadedTiles.values()) {
+          group.traverse((child) => {
+            if (!(child instanceof THREE.InstancedMesh)) return;
+            if (child.geometry === trunkGeometry) trees += child.count;
+            else if (child.geometry === logGeometry) logs += child.count;
+            else if (plants.has(child.material as THREE.Material)) understory += child.count;
+          });
+        }
+        return { trees, understory, logs };
       },
       dispose() {
         cancelAnimationFrame(raf);

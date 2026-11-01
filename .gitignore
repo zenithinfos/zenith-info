@@ -13,3 +13,4 @@ drizzle/meta/_journal.json.bak
 coverage/
 .DS_Store
 npm-debug.log*
+preview/
