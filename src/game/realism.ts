@@ -83,17 +83,21 @@ export function worldClock(
   const day = Math.floor(raw / 24) + 1;
   const hour = raw % 24;
 
+  // Journée de soixante minutes : treize heures et demie de plein jour, une
+  // heure et demie de crépuscule, le reste à la nuit. Vingt-trois minutes de
+  // nuit d'affilée, c'est long dans une forêt où l'on ne voit rien : on garde
+  // la nuit, mais on ne la laisse pas occuper la moitié de la partie.
   let daylight: number;
-  if (hour < 5 || hour >= 20) daylight = 0;
-  else if (hour < 7.5) daylight = (hour - 5) / 2.5;
-  else if (hour < 17.5) daylight = 1;
-  else daylight = Math.max(0, 1 - (hour - 17.5) / 2.5);
+  if (hour < 5.5 || hour >= 20.5) daylight = 0;
+  else if (hour < 7.5) daylight = (hour - 5.5) / 2;
+  else if (hour < 19) daylight = 1;
+  else daylight = Math.max(0, 1 - (hour - 19) / 1.5);
 
   // Courbe douce entre nuit et plein jour.
   daylight = daylight * daylight * (3 - 2 * daylight);
 
   const phase: WorldClock["phase"] =
-    hour < 6 ? "nuit" : hour < 8 ? "aube" : hour < 17.5 ? "jour" : hour < 19.5 ? "crépuscule" : "nuit";
+    hour < 5.5 ? "nuit" : hour < 7.5 ? "aube" : hour < 19 ? "jour" : hour < 20.5 ? "crépuscule" : "nuit";
 
   return { hour, day, daylight, phase };
 }

@@ -97,17 +97,29 @@ export interface LightBudget {
 
 export function lightForDaylight(daylight: number, weatherFactor = 1): LightBudget {
   const d = Math.max(0, Math.min(1, daylight));
+  // Le remplissage du ciel suit une courbe plus douce que le soleil : au
+  // crépuscule, le soleil bas a presque disparu mais le ciel éclaire encore.
+  // Sans cela, 19 h tombait d'un coup dans le noir.
+  const fill = Math.pow(d, 0.72);
   return {
     sun: 0.05 + d * 2.5,
     // Le plancher d'ombre : c'est lui qui décide si la forêt est lisible.
     // Un sous-bois éclairé par le ciel seul reste lisible ; l'œil s'adapte, pas
     // une caméra. Ces valeurs sont mesurées par `scripts/check-light.mjs`.
-    ambient: 0.5 + d * 1.0,
-    hemisphere: 0.52 + d * 1.35,
-    moon: (1 - d) * 0.55,
-    exposure: 1.08 + d * 0.5,
-    environment: 0.7 + d * 0.7,
-    fogDensity: (0.016 - d * 0.007) * weatherFactor,
+    //
+    // Elles ont été remontées une fois de trop bas : à 43 % de vert, une
+    // feuille d'ombre « lisait sa couleur » sur le papier mais la forêt
+    // paraissait noire, parce que le regard ne voit pas une feuille isolée —
+    // il voit un mur de feuilles à 40 m, derrière la brume. Le plancher compte
+    // donc pour la scène entière, pas pour la surface témoin.
+    ambient: 0.6 + fill * 1.34,
+    hemisphere: 0.58 + fill * 1.72,
+    moon: (1 - d) * 0.5,
+    exposure: 1.12 + fill * 0.5,
+    environment: 0.82 + fill * 0.92,
+    // Moins de brume de jour : 0,0065 laisse voir à cent mètres. Au-delà, le
+    // fond vert mangeait toute la lumière qui venait du ciel.
+    fogDensity: (0.014 - d * 0.0075) * weatherFactor,
   };
 }
 
