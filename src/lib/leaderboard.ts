@@ -53,7 +53,7 @@ export function submitEntry(input: SubmitInput): LeaderboardEntry {
     score: Math.max(0, Math.min(999_999, Math.round(input.score))),
     cause,
     mewas: Math.max(0, Math.min(10, Math.round(input.mewas ?? 0))),
-    level: Math.max(1, Math.min(5, Math.round(input.level ?? 1))),
+    level: Math.max(1, Math.min(50, Math.round(input.level ?? 1))),
     seconds: Math.max(0, Math.min(60 * 60 * 12, Math.round(input.seconds ?? 0))),
     at: Date.now(),
   };

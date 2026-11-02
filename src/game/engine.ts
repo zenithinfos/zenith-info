@@ -29,10 +29,12 @@ import { waterDepthAt } from "./water";
 import {
   advanceProgress,
   initialProgress,
-  type ExpeditionLevel,
+  type GameLevel,
   type ProgressState,
 } from "./progression";
 import { swimState } from "./water";
+import { terrainHeight } from "./terrain";
+import { SURVIVAL_PRIZE_XP, XP_REWARDS, levelForXp } from "./xp";
 
 export interface PlayerState {
   position: [number, number, number];
@@ -48,12 +50,24 @@ export interface PlayerState {
  */
 export interface HuntState {
   arsenal: ArsenalState;
-  /** Viande rapportée au camp, en kg. */
+  /** Viande au sac, en kg. */
   meat: number;
+  /** Viande dépecée depuis le début de l'expédition, en kg. */
+  harvested: number;
   /** Bêtes abattues, par espèce. */
   kills: Record<string, number>;
   /** Coups tirés (statistique de piste). */
   shots: number;
+}
+
+/** Un abri construit à la main : quatre poteaux, un toit, un lit, un feu. */
+export interface Shelter {
+  x: number;
+  z: number;
+  /** Numéro d'ordre, pour distinguer les abris sur la carte. */
+  index: number;
+  /** Jour de construction, pour le carnet. */
+  day: number;
 }
 
 /** Fin d'expédition : on ne se relève pas d'une déshydratation. */
@@ -75,7 +89,7 @@ export interface GameState {
   visitedZones: string[];
   observedSpecies: string[];
   gadgets: GadgetState[];
-  /** Expédition en cours : objectifs, zones ouvertes. Sérialisé. */
+  /** Niveau en cours : objectifs, repères, zones ouvertes. Sérialisé. */
   progress: ProgressState;
   /** Les dix esprits de la forêt. */
   mewas: MewaState[];
@@ -88,10 +102,24 @@ export interface GameState {
   fruits: number;
   /** Avancement de la cueillette en cours (0-1). */
   forage: number;
+  /** Avancement du ramassage de bois mort (0-1). */
+  woodForage: number;
   /** Tenues tissées avec des Fils de Rêve. */
   woven: string[];
   /** Non nul quand l'expédition est terminée. */
   death: DeathState | null;
+  /** Abris bâtis (5 bois chacun). */
+  shelters: Shelter[];
+  /** Bois mort ramassé, en fagots. */
+  wood: number;
+  /** Lunettes infrarouges allumées. */
+  goggles: boolean;
+  /** Hauteur au-dessus du sol (saut, chute). */
+  height: number;
+  /** Vitesse verticale, m/s. */
+  vertical: number;
+  /** Garde levée : la prochaine charge coûte de l'endurance, pas de la santé. */
+  blocking: boolean;
   level: number;
   score: number;
   settings: RealismSettings;
@@ -105,6 +133,10 @@ export interface InputState {
   right: boolean;
   run: boolean;
   sneak: boolean;
+  /** Saut demandé (impulsion, pas un état maintenu). */
+  jump?: boolean;
+  /** Garde levée (machette, lance). */
+  block?: boolean;
   /** Direction de déplacement (radians) si piloté au joystick tactile. */
   joystick?: { x: number; y: number } | null;
 }
@@ -112,7 +144,7 @@ export interface InputState {
 export const SAVE_VERSION = 6;
 
 export function initialHunt(): HuntState {
-  return { arsenal: initialArsenalState(), meat: 0, kills: {}, shots: 0 };
+  return { arsenal: initialArsenalState(), meat: 0, harvested: 0, kills: {}, shots: 0 };
 }
 
 export function newGame(characterId = "michelle"): GameState {
@@ -141,8 +173,15 @@ export function newGame(characterId = "michelle"): GameState {
     style: 0,
     fruits: 2,
     forage: 0,
+    woodForage: 0,
     woven: [],
     death: null,
+    shelters: [],
+    wood: 0,
+    goggles: false,
+    height: 0,
+    vertical: 0,
+    blocking: false,
     level: 1,
     score: 0,
     settings: DEFAULT_REALISM,
@@ -180,7 +219,7 @@ export interface StepResult {
   observations: Species[];
   warnings: string[];
   /** Niveau qui vient d'être terminé à ce pas de temps, s'il y en a un. */
-  completedLevel: ExpeditionLevel | null;
+  completedLevel: GameLevel | null;
   /** Mewas ramassés pendant ce pas de temps. */
   mewas: MewaReward[];
   /** Fin d'expédition déclenchée pendant ce pas de temps. */
@@ -234,6 +273,29 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     observedSpecies: [...state.observedSpecies],
   };
 
+  // --- Saut : une impulsion, une gravité, et un retour au sol.
+  // La tenue « Fée des étoiles » réduit la gravité : on plane en maintenant
+  // la touche de saut.
+  const glide = getOutfit(next.player.outfit).power === "glide";
+  // Planer : la tenue « Fée des étoiles » retient la descente. La montée reste
+  // franche, sinon on ne quitterait plus le sol.
+  const gravity = glide && next.vertical < 0 ? 2.4 : 22;
+  if (input.jump && next.height <= 0.001 && next.vitals.stamina > 6) {
+    // 6,4 m/s sous 22 m/s² : un peu moins d'un mètre au sommet, de quoi
+    // passer par-dessus une charge de potamochère (le seuil est à 0,70 m).
+    next.vertical = 6.4;
+    next.vitals.stamina = Math.max(0, next.vitals.stamina - 7);
+  }
+  if (next.height > 0 || next.vertical !== 0) {
+    next.vertical -= gravity * dt;
+    next.height += next.vertical * dt;
+    if (next.height <= 0) {
+      next.height = 0;
+      next.vertical = 0;
+    }
+  }
+  next.blocking = Boolean(input.block);
+
   const mode: "walk" | "run" | "sneak" = input.run && next.vitals.stamina > 5
     ? "run"
     : input.sneak
@@ -260,12 +322,13 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
 
     const [px, , pz] = next.player.position;
     const swim = swimState(px, pz, next.elapsed, worldClock(next.elapsed, next.settings).hour);
-    const speed = effectiveSpeed(next, mode, swim.speedFactor);
+    const walkingOnWater = getOutfit(next.player.outfit).power === "water";
+    const speed = effectiveSpeed(next, mode, walkingOnWater ? 1 : swim.speedFactor);
     const nx = px + dx * speed * dt + swim.drift[0] * dt;
     const nz = pz + dz * speed * dt + swim.drift[1] * dt;
 
     next.player.position = [clampWorld(nx), next.player.position[1], clampWorld(nz)];
-    next.player.motion = swim.inWater ? "swim" : mode;
+    next.player.motion = swim.inWater && !walkingOnWater ? "swim" : mode;
   } else {
     next.player.motion = "idle";
   }
@@ -284,7 +347,10 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
   const zone = zoneAt(next.player.position[0], next.player.position[2]);
   const enteredZone = zone.id !== next.zoneId;
   next.zoneId = zone.id;
-  if (!next.visitedZones.includes(zone.id)) next.visitedZones.push(zone.id);
+  if (!next.visitedZones.includes(zone.id)) {
+    next.visitedZones.push(zone.id);
+    next.xp += XP_REWARDS.zone;
+  }
 
   const noise = next.player.motion === "run" ? 8 : next.player.motion === "sneak" ? 1 : 3;
   const present = spawnFor({
@@ -301,6 +367,7 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     if (noise <= 3 && distanceToZoneCenter(species, zone) < zone.radius) {
       next.observedSpecies.push(species.id);
       observations.push(species);
+      next.xp += XP_REWARDS.observe;
     }
   }
 
@@ -328,13 +395,31 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     }
   }
 
-  next.score = faunaScore(next.observedSpecies) + next.style + mewasFound(next.mewas) * 60;
+  // --- Bois mort : il traîne partout, il suffit de se baisser.
+  if (next.player.motion !== "idle" && next.wood < 12) {
+    next.woodForage = Math.min(1, next.woodForage + dt / 22);
+    if (next.woodForage >= 1) {
+      next.woodForage = 0;
+      next.wood += 1;
+    }
+  }
+
+  // Le score d'une vie : ce qu'on a vu, ce qu'on a tué, ce qu'on a rapporté,
+  // les esprits trouvés et les nuits passées sous un toit à soi.
+  const kills = Object.values(next.hunt.kills).reduce((total, count) => total + count, 0);
+  next.score =
+    faunaScore(next.observedSpecies) +
+    next.style +
+    kills * 20 +
+    Math.round(next.hunt.harvested * 2) +
+    mewasFound(next.mewas) * 60 +
+    next.shelters.length * 40;
 
   // Progression : si tous les objectifs de l'expédition en cours sont remplis,
   // on passe au niveau suivant et on ouvre les zones qu'il débloque.
   const advanced = advanceProgress(next);
   const finalState = advanced.state;
-  finalState.level = Math.min(finalState.progress.levelIndex + 1, 5);
+  finalState.level = levelForXp(finalState.xp);
 
   const warnings: string[] = [];
   if (next.vitals.health < 30) warnings.push("Santé critique");
@@ -405,7 +490,12 @@ export interface ActionResult {
     | "grill.far"
     | "weave.ok"
     | "weave.threads"
-    | "weave.owned";
+    | "weave.owned"
+    | "shelter.ok"
+    | "shelter.wood"
+    | "shelter.slope"
+    | "sleep.ok"
+    | "sleep.none";
   amount?: number;
 }
 
@@ -509,9 +599,146 @@ export function restartExpedition(state: GameState, characterId = state.player.c
   return {
     ...fresh,
     mewas: spawnMewas(Math.floor(Math.random() * 2 ** 31), DEFAULT_START.position),
+    // Ce qui appartient au joueur, pas à l'expédition : l'expérience, les
+    // tenues, les Fils de Rêve et le style. Sans cela, mourir au niveau 30
+    // ramènerait au niveau 1 et le Prix de Survie serait hors d'atteinte —
+    // une courbe de cinquante niveaux pour une seule vie n'a aucun sens.
+    xp: state.xp,
+    level: state.level,
+    style: state.style,
+    threads: state.threads,
     woven: state.woven,
     player: { ...fresh.player, outfit: state.player.outfit },
   };
+}
+
+// ------------------------------------------------------------------
+// Progression d'expérience
+// ------------------------------------------------------------------
+
+/** Ajoute de l'XP et recalcule le niveau. */
+export function awardXp(state: GameState, amount: number): GameState {
+  if (amount <= 0) return state;
+  const xp = state.xp + Math.round(amount);
+  return { ...state, xp, level: levelForXp(xp) };
+}
+
+/** Bête abattue : compteur de chasse + XP. */
+export function recordKill(state: GameState, speciesId: string, speciesPoints: number): GameState {
+  const kills = { ...state.hunt.kills, [speciesId]: (state.hunt.kills[speciesId] ?? 0) + 1 };
+  return awardXp(
+    { ...state, hunt: { ...state.hunt, kills } },
+    XP_REWARDS.kill(speciesPoints),
+  );
+}
+
+/** Viande dépecée : au sac, au compteur cumulé, et en XP. */
+export function recordHarvest(state: GameState, kg: number): GameState {
+  const next: GameState = {
+    ...state,
+    hunt: {
+      ...state.hunt,
+      meat: state.hunt.meat + kg,
+      harvested: state.hunt.harvested + kg,
+    },
+  };
+  return awardXp(next, XP_REWARDS.harvest(kg));
+}
+
+/**
+ * Le Prix de Survie : 2 500 XP, soit le niveau 50.
+ * Il se constate, il ne se stocke pas — comme le niveau.
+ */
+export function hasSurvivalPrize(state: GameState): boolean {
+  return state.xp >= SURVIVAL_PRIZE_XP;
+}
+
+// ------------------------------------------------------------------
+// Abri, bois, repos, lunettes
+// ------------------------------------------------------------------
+
+/** Bois nécessaire à un abri. */
+export const SHELTER_WOOD = 5;
+
+/** Ramasse du bois mort (fagot). */
+export function gatherWood(state: GameState, bundles = 1): GameState {
+  if (state.death) return state;
+  return { ...state, wood: Math.min(24, state.wood + bundles) };
+}
+
+/** L'abri le plus proche, dans un rayon donné. */
+export function nearestShelter(state: GameState, radius = 3): Shelter | null {
+  const [x, , z] = state.player.position;
+  let best: Shelter | null = null;
+  let bestDistance = radius;
+  for (const shelter of state.shelters) {
+    const distance = Math.hypot(shelter.x - x, shelter.z - z);
+    if (distance <= bestDistance) {
+      best = shelter;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * Bâtit un abri : cinq fagots, un terrain à peu près plat, pas de doublon.
+ * Le toit, le lit et le feu sont dessinés par la scène à partir de `shelters`.
+ */
+export function buildShelter(state: GameState): ActionResult {
+  if (state.death) return { state, code: "shelter.slope" };
+  if (state.wood < SHELTER_WOOD) return { state, code: "shelter.wood" };
+  const [x, , z] = state.player.position;
+  const ground = terrainHeight(x, z);
+  const slope = Math.max(
+    Math.abs(terrainHeight(x + 1.5, z) - ground),
+    Math.abs(terrainHeight(x, z + 1.5) - ground),
+  );
+  if (slope > 0.9) return { state, code: "shelter.slope" };
+  if (nearestShelter(state, 12)) return { state, code: "shelter.slope" };
+  const shelter: Shelter = {
+    x,
+    z,
+    index: state.shelters.length,
+    day: Math.floor(state.elapsed / 60) + 1,
+  };
+  const next: GameState = {
+    ...state,
+    wood: state.wood - SHELTER_WOOD,
+    shelters: [...state.shelters, shelter],
+  };
+  return { state: awardXp(next, XP_REWARDS.shelter), code: "shelter.ok" };
+}
+
+/**
+ * Dormir sous l'abri : deux heures passent, la santé remonte, la soif et la
+ * faim descendent d'autant. C'est un vrai échange, pas un soin gratuit.
+ */
+export function sleepAtShelter(state: GameState): ActionResult {
+  if (state.death) return { state, code: "sleep.none" };
+  if (!nearestShelter(state, 3.5)) return { state, code: "sleep.none" };
+  const hours = 2;
+  const seconds = hours * (state.settings.dayLengthMinutes * 60) / 24;
+  const drained = tickVitals(state.vitals, {
+    running: false,
+    sheltered: true,
+    wetness: state.vitals.wetness,
+    weather: state.weather,
+    hour: worldClock(state.elapsed, state.settings).hour,
+    deltaSeconds: seconds,
+  });
+  const vitals = {
+    ...drained,
+    health: Math.min(100, drained.health + 38),
+    stamina: 100,
+  };
+  const next: GameState = { ...state, vitals, elapsed: state.elapsed + seconds };
+  return { state: awardXp(next, XP_REWARDS.sleep), code: "sleep.ok" };
+}
+
+/** Lunettes infrarouges : voir dans le noir. */
+export function toggleGoggles(state: GameState): GameState {
+  return { ...state, goggles: !state.goggles };
 }
 
 /** Sérialise l'état pour l'API de sauvegarde. */
@@ -537,6 +764,10 @@ export function serialize(state: GameState): Record<string, unknown> {
     style: state.style,
     fruits: state.fruits,
     forage: Math.round(state.forage * 100) / 100,
+    wood: state.wood,
+    woodForage: Math.round(state.woodForage * 100) / 100,
+    shelters: state.shelters,
+    goggles: state.goggles,
     woven: state.woven,
     death: state.death,
     hunt: {
@@ -589,6 +820,14 @@ export function deserialize(raw: Record<string, unknown>): GameState {
     style: typeof raw.style === "number" ? raw.style : 0,
     fruits: typeof raw.fruits === "number" ? raw.fruits : base.fruits,
     forage: typeof raw.forage === "number" ? raw.forage : 0,
+    wood: typeof raw.wood === "number" ? raw.wood : 0,
+    woodForage: typeof raw.woodForage === "number" ? raw.woodForage : 0,
+    shelters: Array.isArray(raw.shelters)
+      ? (raw.shelters as Shelter[]).filter(
+          (shelter) => typeof shelter?.x === "number" && typeof shelter?.z === "number",
+        )
+      : [],
+    goggles: raw.goggles === true,
     woven: Array.isArray(raw.woven) ? (raw.woven as string[]) : [],
     death: deserializeDeath(raw.death),
   };
@@ -664,6 +903,7 @@ function deserializeHunt(raw: unknown): HuntState {
       current: (arsenal?.current as HuntState["arsenal"]["current"]) ?? base.arsenal.current,
     },
     meat: typeof source.meat === "number" ? source.meat : 0,
+    harvested: typeof source.harvested === "number" ? source.harvested : 0,
     kills: source.kills && typeof source.kills === "object" ? source.kills : {},
     shots: typeof source.shots === "number" ? source.shots : 0,
   };

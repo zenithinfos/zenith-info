@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Déroule une expédition entière, sans navigateur.
+ * Les niveaux du jeu, sans navigateur.
  *
  *   node scripts/check-progression.mjs
  *
- * Le module de progression est pur : on peut donc simuler un joueur qui marche,
- * abat, dépèce et observe, et vérifier que les cinq niveaux s'enchaînent dans
- * l'ordre, que les zones s'ouvrent au bon moment et qu'aucun objectif ne se
- * valide tout seul (par exemple parce qu'il était déjà rempli avant le niveau).
+ * Le module de progression est pur : on peut donc faire jouer un explorateur
+ * virtuel — il marche jusqu'au sentier, abat deux hingebe, rapporte la viande,
+ * descend au baï — et vérifier que les chapitres s'enchaînent dans l'ordre,
+ * qu'aucun objectif ne se valide tout seul et que les zones s'ouvrent au bon
+ * moment.
  */
 
 import { build } from "esbuild";
@@ -16,10 +17,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const dir = await mkdtemp(path.join(tmpdir(), "minkebe-progress-"));
-const bundle = path.join(dir, "progression.mjs");
+const bundle = path.join(dir, "progress.mjs");
 await build({
   stdin: {
-    contents: `export * from "./src/game/progression.ts"; export * from "./src/game/engine.ts";`,
+    contents: `export * from "./src/game/progression.ts"; export * from "./src/game/engine.ts"; export * from "./src/game/xp.ts";`,
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -30,110 +31,153 @@ await build({
   outfile: bundle,
   logLevel: "error",
 });
-const { LEVELS, levelStatus, newGame, advanceProgress, serialize, deserialize } = await import(
-  `${bundle}?t=${Date.now()}`
-);
+const {
+  LEVELS,
+  advanceProgress,
+  levelStatus,
+  currentLevel,
+  newGame,
+  recordKill,
+  recordHarvest,
+  serialize,
+  deserialize,
+  MAX_LEVEL,
+  SURVIVAL_PRIZE_XP,
+  xpForLevel,
+  levelForXp,
+  levelProgress,
+} = await import(`${bundle}?t=${Date.now()}`);
 await rm(dir, { recursive: true, force: true });
 
-/** Un pas de jeu factice : on modifie directement ce que le joueur produirait. */
-function apply(state, action) {
-  const next = {
-    ...state,
-    hunt: { ...state.hunt, kills: { ...state.hunt.kills }, meat: state.hunt.meat },
-    visitedZones: [...state.visitedZones],
-    observedSpecies: [...state.observedSpecies],
-  };
-  if (action.kill) {
-    next.hunt.kills[action.kill] = (next.hunt.kills[action.kill] ?? 0) + 1;
-  }
-  if (action.meat) next.hunt.meat += action.meat;
-  if (action.visit && !next.visitedZones.includes(action.visit)) next.visitedZones.push(action.visit);
-  if (action.observe) {
-    for (let i = 0; i < action.observe; i++) {
-      next.observedSpecies.push(`espece-${next.observedSpecies.length}`);
-    }
-  }
-  return advanceProgress(next);
-}
-
-let state = newGame();
 let failures = 0;
-
-// Le joueur a déjà chassé avant de recevoir ses objectifs. Les objectifs étant
-// cumulatifs, ce travail compte — et surtout, il ne peut pas bloquer la suite.
-state.hunt.kills.hingebe = 4;
-state.hunt.meat = 30;
-state.hunt.kills.crocodile = 1;
-state.observedSpecies.push("elephant", "gorille", "bongo");
-
-const script = [
-  { note: "le camp, puis la piste", visit: "sentier", observe: 3 },
-  { note: "deux hingebe, 8 kg", kill: "hingebe", meat: 4 },
-  { note: "deuxième hingebe", kill: "hingebe", meat: 4 },
-  { note: "le baï", visit: "clairiere" },
-  { note: "un sitatunga", kill: "sitatunga", meat: 9 },
-  { note: "encore de la viande", meat: 8 },
-  { note: "la rivière", visit: "riviere" },
-  { note: "un crocodile", kill: "crocodile", meat: 12 },
-  { note: "un bongo", kill: "bongo", meat: 20 },
-  { note: "un gorille", kill: "gorille", meat: 20 },
-];
-
-for (const entry of script) {
-  const before = levelStatus(state);
-  const previous = state.progress.levelIndex;
-  const result = apply(state, entry);
-  state = result.state;
-
-  if (previous === state.progress.levelIndex && !result.completed) {
-    const marks = before.objectives.map((o) => `${o.current}/${o.target}`).join(" ");
-    console.log(`  · ${entry.note.padEnd(26)} ${before.level ? before.level.id : "—"} ${marks}`);
-  }
-  if (result.completed) {
-    const nextLevel = LEVELS[state.progress.levelIndex];
-    console.log(`  ✓ ${entry.note.padEnd(26)} fin du niveau « ${result.completed.id} » → ${nextLevel ? nextLevel.id : "campagne terminée"}`);
-    console.log(`    zones ouvertes : ${state.progress.unlocks.join(", ") || "aucune"}`);
-  }
-  void before;
-}
-
-// --- vérifications -------------------------------------------------------
-
-const expect = (label, condition) => {
-  if (!condition) {
-    failures += 1;
-    console.log(`  ✗ ${label}`);
-  } else {
-    console.log(`  ✓ ${label}`);
-  }
+const check = (label, ok, detail = "") => {
+  console.log(`  ${ok ? "✓" : "✗"} ${label}${detail ? ` — ${detail}` : ""}`);
+  if (!ok) failures += 1;
 };
 
-console.log("");
-expect("les cinq niveaux sont terminés", state.progress.completed.length === LEVELS.length);
-expect("l'ordre de la campagne est respecté", state.progress.completed.join(",") === LEVELS.map((l) => l.id).join(","));
-expect("toutes les zones sont ouvertes", state.progress.unlocks.length >= 5);
-expect("plus aucun objectif en cours", levelStatus(state).level === null);
-
-// Une sauvegarde rechargée doit retrouver la même progression.
-const roundTrip = deserialize(serialize(state));
-expect("la progression survit à une sauvegarde", roundTrip.progress.levelIndex === state.progress.levelIndex);
-expect("les zones ouvertes survivent aussi", roundTrip.progress.unlocks.join(",") === state.progress.unlocks.join(","));
-
-// Aucun niveau ne doit pouvoir se bloquer : chaque objectif de chaque niveau
-// doit rester atteignable quel que soit l'ordre des chasses.
-const deadEnds = [];
-for (const level of LEVELS) {
-  for (const objective of level.objectives) {
-    const reachable =
-      objective.kind === "meat" ||
-      objective.kind === "observe" ||
-      objective.kind === "visit" ||
-      (objective.kind === "kills" && objective.target.length > 0);
-    if (!reachable) deadEnds.push(`${level.id}/${objective.label}`);
-  }
+/** Simule une action du joueur et renvoie l'état + le niveau terminé. */
+function play(state, mutate) {
+  const next = mutate(state);
+  const { state: advanced, completed } = advanceProgress(next);
+  return { state: advanced, completed };
 }
-expect("aucun objectif impossible à remplir", deadEnds.length === 0);
-expect("un crocodile abattu trop tôt ne bloque pas le niveau 4", state.progress.completed.includes("riviere"));
 
-console.log(failures === 0 ? "\nExpédition valide." : `\n${failures} problème(s).`);
+console.log("\nLa courbe d'expérience");
+check("cinquante niveaux", MAX_LEVEL === 50);
+check("le Prix de Survie est à 2 500 XP", SURVIVAL_PRIZE_XP === 2500);
+check("niveau 1 à 0 XP", xpForLevel(1) === 0);
+check("niveau 50 à 2 500 XP", xpForLevel(50) === SURVIVAL_PRIZE_XP);
+check(
+  "la courbe ne redescend jamais",
+  Array.from({ length: 49 }, (_, i) => xpForLevel(i + 2) > xpForLevel(i + 1)).every(Boolean),
+);
+check("une XP de 0 donne le niveau 1", levelForXp(0) === 1);
+check("2 500 XP donnent le niveau 50", levelForXp(2500) === 50);
+check("3 000 XP ne dépassent pas 50", levelForXp(3000) === 50);
+const progress10 = levelProgress(xpForLevel(10));
+check("la barre du niveau 10 est à 0 %", progress10.level === 10 && progress10.into === 0);
+check("le niveau 10 donne un objectif suivant", progress10.nextAt > xpForLevel(10));
+
+console.log("\nLes chapitres");
+check("cinq chapitres", LEVELS.length === 5);
+let state = newGame();
+check("l'expédition démarre au chapitre 1", currentLevel(state.progress)?.id === LEVELS[0].id);
+
+// 1. Reconnaissance : rejoindre le sentier + observer deux espèces.
+check(
+  "rien n'est validé au départ",
+  levelStatus(state).objectives.every((entry) => entry.current === 0),
+);
+state = { ...state, visitedZones: [...state.visitedZones, "sentier"] };
+let step1 = advanceProgress(state);
+check("rejoindre le sentier ne suffit pas", step1.completed === null);
+state = { ...state, observedSpecies: ["calao", "papillon"] };
+step1 = play(state, (s) => s);
+check("deux espèces observées terminent le chapitre 1", step1.completed?.id === "reconnaissance");
+state = step1.state;
+check(
+  "le chapitre 1 ouvre le sentier",
+  state.progress.unlocks.includes("sentier"),
+  state.progress.unlocks.join(", ") || "aucune",
+);
+
+// 2. Première battue : deux hingebe + 10 kg.
+step1 = play(state, (s) => recordKill(s, "hingebe", 20));
+check("un hingebe ne suffit pas", step1.completed === null);
+state = step1.state;
+state = recordKill(state, "hingebe", 20);
+let step2 = play(state, (s) => recordHarvest(s, 6));
+check("la viande seule ne suffit pas", step2.completed === null);
+state = step2.state;
+step2 = play(state, (s) => recordHarvest(s, 5));
+check("deux hingebe et 11 kg terminent le chapitre 2", step2.completed?.id === "premiere-battue");
+state = step2.state;
+check("le chapitre 2 ouvre la clairière", state.progress.unlocks.includes("clairiere"));
+
+// 3. Le baï : clairière + sitatunga + 5 espèces.
+state = { ...state, visitedZones: [...state.visitedZones, "clairiere"] };
+state = recordKill(state, "sitatunga", 70);
+state = { ...state, observedSpecies: ["calao", "papillon", "hingebe", "sitatunga", "bongo"] };
+const step3 = play(state, (s) => s);
+check("le baï termine le chapitre 3", step3.completed?.id === "bai");
+state = step3.state;
+check("le chapitre 3 ouvre la rivière", state.progress.unlocks.includes("riviere"));
+
+// 4. La rivière : y aller, un crocodile, 45 kg de viande.
+state = { ...state, visitedZones: [...state.visitedZones, "riviere"] };
+state = recordKill(state, "crocodile", 60);
+// 11 kg ont déjà été rapportés au chapitre 2 : l'objectif des 45 kg est
+// cumulatif, c'est précisément ce qu'on vérifie ici.
+let step4 = play(state, (s) => recordHarvest(s, 20));
+check("31 kg en tout ne suffisent pas pour la rivière", step4.completed === null);
+state = step4.state;
+step4 = play(state, (s) => recordHarvest(s, 15));
+check("le crocodile et 46 kg terminent le chapitre 4", step4.completed?.id === "riviere");
+state = step4.state;
+check("le chapitre 4 ouvre la forêt profonde", state.progress.unlocks.includes("foret-profonde"));
+
+// 5. La grande traque : un bongo, cinq Mewas, un abri.
+state = recordKill(state, "bongo", 95);
+state = {
+  ...state,
+  mewas: state.mewas.map((mewa, index) => (index < 5 ? { ...mewa, collected: true } : mewa)),
+};
+let step5 = play(state, (s) => s);
+check("sans abri, le dernier chapitre reste ouvert", step5.completed === null);
+state = step5.state;
+state = { ...state, shelters: [{ x: 0, z: 0, index: 0, day: 1 }] };
+step5 = play(state, (s) => s);
+check("bongo + cinq Mewas + abri terminent la campagne", step5.completed?.id === "grande-traque");
+state = step5.state;
+check("plus de chapitre après la campagne", currentLevel(state.progress) === null);
+check("toutes les zones sont ouvertes", state.progress.unlocks.length >= 5, state.progress.unlocks.join(", "));
+
+console.log("\nL'expérience");
+check("abattre donne de l'XP", state.xp > 0, `${Math.round(state.xp)} XP`);
+check(
+  "le niveau suit l'XP",
+  state.level === levelForXp(state.xp),
+  `niveau ${state.level}`,
+);
+check(
+  "les récompenses de chapitre sont comptées",
+  state.xp >= 50 + 120 + 200 + 300 + 500,
+  `${Math.round(state.xp)} XP`,
+);
+
+console.log("\nLa sauvegarde");
+const saved = deserialize(JSON.parse(JSON.stringify(serialize(state))));
+check("le chapitre survit", saved.progress.levelIndex === state.progress.levelIndex);
+check("les zones ouvertes survivent", saved.progress.unlocks.length === state.progress.unlocks.length);
+check("les chapitres terminés survivent", saved.progress.completed.length === state.progress.completed.length);
+check("l'XP survit", saved.xp === state.xp);
+
+const fresh = deserialize({ version: 5, player: { position: [0, 0, 6] } });
+check("une sauvegarde d'avant les chapitres repart au 1", fresh.progress.levelIndex === 0);
+
+console.log(
+  failures === 0
+    ? "\nLes cinq chapitres s'enchaînent, l'XP suit.\n"
+    : `\n${failures} vérification(s) en échec.\n`,
+);
 process.exit(failures === 0 ? 0 : 1);

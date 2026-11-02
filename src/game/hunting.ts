@@ -12,7 +12,7 @@
 
 import { type Animal, ANIMAL_BUILDS, applyDamage, bodyCenterY, headCenterY } from "./animals";
 
-export type WeaponId = "couteau" | "machette" | "lance" | "pistolet" | "m16";
+export type WeaponId = "couteau" | "machette" | "lance" | "pistolet" | "m16" | "fusil";
 
 export interface Weapon {
   id: WeaponId;
@@ -129,6 +129,24 @@ export const WEAPONS: Weapon[] = [
     automatic: true,
     headshot: 2.2,
     description: "Tir en rafale, portée longue. Le bruit porte à des kilomètres.",
+  },
+  {
+    id: "fusil",
+    name: "Fusil à pompe calibre 12",
+    short: "Cal. 12",
+    kind: "feu",
+    damage: 165,
+    range: 38,
+    cooldown: 0.95,
+    magazine: 6,
+    reload: 3.1,
+    reserve: 24,
+    spread: 0.075,
+    noise: 12,
+    automatic: false,
+    headshot: 1.5,
+    description:
+      "Six chevrotines dans le tube. Portée courte, arrêt net : c'est l'arme qu'on sort quand un potamochère charge.",
   },
 ];
 

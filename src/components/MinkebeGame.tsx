@@ -21,10 +21,18 @@ import {
   serialize,
   step,
   atCamp,
+  buildShelter,
+  recordHarvest,
+  recordKill,
+  nearestShelter,
+  SHELTER_WOOD,
+  sleepAtShelter,
+  toggleGoggles,
   waterWithin,
   weatherLabel,
   weaveOutfit,
 } from "@/game/engine";
+import { SURVIVAL_PRIZE_XP, levelProgress } from "@/game/xp";
 import { MEWA_COUNT, mewasFound, wildMewas } from "@/game/mewas";
 import { outfitAvailable, getOutfit } from "@/game/outfits";
 import { LEVELS, levelStatus } from "@/game/progression";
@@ -123,8 +131,12 @@ export default function MinkebeGame() {
     right: false,
     run: false,
     sneak: false,
+    jump: false,
+    block: false,
     joystick: { x: 0, y: 0 },
   });
+  /** Délai avant qu'une même bête puisse infliger un deuxième coup. */
+  const chargeHitRef = useRef(new Map<number, number>());
   const netRef = useRef<MinkebeNet | null>(null);
   const rafRef = useRef(0);
   const lastHudRef = useRef(0);
@@ -189,6 +201,31 @@ export default function MinkebeGame() {
     stateRef.current = { ...stateRef.current, hunt: next };
   }, []);
 
+  /**
+   * Applique un état complet — utilisé quand une action change l'XP et pas
+   * seulement le tableau de chasse. C'est ici que se joue la montée de niveau,
+   * donc ici qu'on l'annonce.
+   */
+  const commitState = useCallback(
+    (next: GameState) => {
+      const before = stateRef.current;
+      stateRef.current = next;
+      huntRef.current = next.hunt;
+      setHud(next);
+      if (next.level > before.level) {
+        const prize = next.xp >= SURVIVAL_PRIZE_XP;
+        pushToast({
+          title: `${t("game.level")} ${next.level}`,
+          detail: prize
+            ? `${t("game.prizeWon")} · ${Math.round(next.xp)} XP`
+            : `${Math.round(next.xp)} XP · ${t("game.survivalPrize")}`,
+          tone: "succes",
+        });
+      }
+    },
+    [pushToast, t],
+  );
+
   const equip = useCallback(
     (id: WeaponId) => {
       const arsenal = { ...huntRef.current.arsenal, current: id };
@@ -238,9 +275,15 @@ export default function MinkebeGame() {
       window.setTimeout(() => setHitMarker("none"), report.hit?.killed ? 420 : 180);
       if (report.hit.killed) {
         const build = ANIMAL_BUILDS[report.hit.speciesId];
-        const kills = { ...huntRef.current.kills };
-        kills[report.hit.speciesId] = (kills[report.hit.speciesId] ?? 0) + 1;
-        commitHunt({ ...huntRef.current, kills });
+        // Le compteur de chasse et l'XP se mettent à jour ensemble : deux
+        // chemins séparés finissaient toujours par diverger.
+        commitState(
+          recordKill(
+            { ...stateRef.current, hunt: huntRef.current },
+            report.hit.speciesId,
+            species?.points ?? 10,
+          ),
+        );
         pushToast({
           title: `${species?.emoji ?? "🎯"} ${species?.name ?? "Animal"} abattu`,
           detail: `${report.hit.headshot ? "Tir à la tête · " : ""}${build?.meat ?? 0} kg à dépecer`,
@@ -248,7 +291,7 @@ export default function MinkebeGame() {
         });
       }
     }
-  }, [commitHunt, pushToast]);
+  }, [commitHunt, commitState, pushToast]);
 
   useEffect(() => {
     fireRef.current = fire;
@@ -269,7 +312,7 @@ export default function MinkebeGame() {
     if (!carcass) return;
     const result = harvest(carcass);
     if (!result) return;
-    commitHunt({ ...huntRef.current, meat: huntRef.current.meat + result.meat });
+    commitState(recordHarvest({ ...stateRef.current, hunt: huntRef.current }, result.meat));
     carcassNearRef.current = null;
     setCarcassNear(null);
     pushToast({
@@ -277,7 +320,7 @@ export default function MinkebeGame() {
       detail: `${result.name} — viande au sac : ${Math.round(huntRef.current.meat + result.meat)} kg`,
       tone: "succes",
     });
-  }, [commitHunt, pushToast]);
+  }, [commitState, pushToast]);
 
   // ------------------------------------------------------------------
   // Survie : boire, manger, griller, tisser
@@ -327,6 +370,56 @@ export default function MinkebeGame() {
     } else {
       pushToast({ title: t("game.grillNone"), tone: "alerte" });
     }
+  }, [pushToast, t]);
+
+  // ------------------------------------------------------------------
+  // Abri, repos, lunettes
+  // ------------------------------------------------------------------
+  const shelterUp = useCallback(() => {
+    const result = buildShelter(stateRef.current);
+    stateRef.current = result.state;
+    setHud(result.state);
+    if (result.code === "shelter.ok") {
+      pushToast({
+        title: t("game.shelterBuilt"),
+        detail: `${SHELTER_WOOD} 🪵 · ${t("game.shelterLeft")} ${result.state.wood} 🪵`,
+        tone: "succes",
+      });
+    } else if (result.code === "shelter.wood") {
+      pushToast({
+        title: t("game.shelterWood"),
+        detail: `${result.state.wood} / ${SHELTER_WOOD} 🪵`,
+        tone: "alerte",
+      });
+    } else {
+      pushToast({ title: t("game.shelterSlope"), tone: "alerte" });
+    }
+  }, [pushToast, t]);
+
+  const sleep = useCallback(() => {
+    const result = sleepAtShelter(stateRef.current);
+    stateRef.current = result.state;
+    setHud(result.state);
+    if (result.code === "sleep.ok") {
+      pushToast({
+        title: t("game.sleepOk"),
+        detail: `❤ ${Math.round(result.state.vitals.health)} · ⚡ ${Math.round(result.state.vitals.stamina)}`,
+        tone: "succes",
+      });
+    } else {
+      pushToast({ title: t("game.sleepNone"), tone: "info" });
+    }
+  }, [pushToast, t]);
+
+  const goggles = useCallback(() => {
+    const next = toggleGoggles(stateRef.current);
+    stateRef.current = next;
+    setHud(next);
+    sceneRef.current?.setGoggles(next.goggles);
+    pushToast({
+      title: next.goggles ? t("game.gogglesOn") : t("game.gogglesOff"),
+      tone: "info",
+    });
   }, [pushToast, t]);
 
   const weave = useCallback(
@@ -439,6 +532,9 @@ export default function MinkebeGame() {
     eat: () => {},
     grill: () => {},
     dress: () => {},
+    shelter: () => {},
+    sleep: () => {},
+    goggles: () => {},
   });
   useEffect(() => {
     actionsRef.current = {
@@ -449,8 +545,11 @@ export default function MinkebeGame() {
       eat,
       grill,
       dress: () => setShowDressing((value) => !value),
+      shelter: shelterUp,
+      sleep,
+      goggles,
     };
-  }, [equip, reload, skinCarcass, drink, eat, grill]);
+  }, [equip, reload, skinCarcass, drink, eat, grill, shelterUp, sleep, goggles]);
 
   // Tir automatique : on maintient la gâchette, la cadence est gérée par l'arme.
   useEffect(() => {
@@ -464,11 +563,19 @@ export default function MinkebeGame() {
         firingRef.current = true;
         fireRef.current();
       }
-      if (event.button === 2) sceneRef.current?.setAiming(true);
+      if (event.button === 2) {
+        // Parade : on lève la garde ET on épaule. Tenir une arme à deux mains
+        // devant une charge, c'est exactement la même posture.
+        inputRef.current.block = true;
+        sceneRef.current?.setAiming(true);
+      }
     };
     const onUp = (event: MouseEvent) => {
       if (event.button === 0) firingRef.current = false;
-      if (event.button === 2) sceneRef.current?.setAiming(false);
+      if (event.button === 2) {
+        inputRef.current.block = false;
+        sceneRef.current?.setAiming(false);
+      }
     };
     const onContext = (event: MouseEvent) => event.preventDefault();
     window.addEventListener("mousedown", onDown);
@@ -479,6 +586,7 @@ export default function MinkebeGame() {
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("contextmenu", onContext);
       firingRef.current = false;
+      inputRef.current.block = false;
       sceneRef.current?.setAiming(false);
     };
   }, [phase]);
@@ -504,12 +612,17 @@ export default function MinkebeGame() {
 
       const result = step(stateRef.current, inputRef.current, dt);
       stateRef.current = result.state;
+      // Le saut est une impulsion : on la consomme, sinon rester appuyé sur
+      // Espace ferait sauter à chaque atterrissage.
+      inputRef.current.jump = false;
 
       const controller = sceneRef.current;
       const clockNow = worldClock(result.state.elapsed, result.state.settings);
       if (controller) {
         const player = result.state.player;
-        controller.setPlayer(player.position, player.heading, player.motion);
+        controller.setPlayer(player.position, player.heading, player.motion, result.state.height);
+        controller.setShelters(result.state.shelters);
+        controller.setGoggles(result.state.goggles);
         controller.setEnvironment({
           hour: clockNow.hour,
           daylight: clockNow.daylight,
@@ -554,19 +667,48 @@ export default function MinkebeGame() {
           hour: clockNow.hour,
           weather: result.state.weather.current,
           zoneId: result.state.zoneId,
+          // Les tenues tissées changent la relation aux bêtes, pas la forêt.
+          tame: getOutfit(result.state.player.outfit).power === "tame",
+          calm: getOutfit(result.state.player.outfit).power === "calm",
         },
         dt,
       );
       animalsRef.current = herd.animals;
       controller?.setAnimals(herd.animals);
 
-      // Une panthère qui charge et vous atteint entame la santé.
+      // Une charge qui atteint le joueur entame la santé — sauf si on l'a
+      // parée, ou si on l'a sautée. Chaque bête ne frappe qu'une fois toutes
+      // les 1,4 s : sans ce délai, une charge collée vidait 100 PV en trois
+      // secondes sans que le joueur ait le temps de comprendre.
+      const hitClock = performance.now();
       for (const animal of herd.animals) {
         if (animal.state !== "charge") continue;
         const dx = animal.x - result.state.player.position[0];
         const dz = animal.z - result.state.player.position[2];
-        if (Math.hypot(dx, dz) < 2.2) {
-          result.state.vitals.health = Math.max(0, result.state.vitals.health - dt * 14);
+        if (Math.hypot(dx, dz) >= 2.2) continue;
+        // Sauter par-dessus la charge : le seul geste qui annule les dégâts
+        // sans consommer d'endurance.
+        if (result.state.height > 0.7) continue;
+        const last = chargeHitRef.current.get(animal.id) ?? 0;
+        if (hitClock - last < 1400) continue;
+        chargeHitRef.current.set(animal.id, hitClock);
+
+        const species = getSpecies(animal.speciesId);
+        // Le buffle et le potamochère frappent plus fort que la panthère.
+        const base = animal.speciesId === "buffle" ? 34 : animal.speciesId === "potamochere" ? 26 : 22;
+        if (result.state.blocking) {
+          const cost = 16;
+          if (result.state.vitals.stamina >= cost) {
+            result.state.vitals.stamina -= cost;
+            result.state.vitals.health = Math.max(0, result.state.vitals.health - base * 0.15);
+            pushToast({ title: t("game.blocking"), detail: `⚡ −${cost}`, tone: "info" });
+          } else {
+            result.state.vitals.health = Math.max(0, result.state.vitals.health - base);
+            pushToast({ title: t("game.charge"), detail: species?.name, tone: "alerte" });
+          }
+        } else {
+          result.state.vitals.health = Math.max(0, result.state.vitals.health - base);
+          pushToast({ title: t("game.charge"), detail: species?.name, tone: "alerte" });
         }
       }
 
@@ -655,8 +797,10 @@ export default function MinkebeGame() {
       ArrowRight: "right",
       ShiftLeft: "run",
       ShiftRight: "run",
-      ControlLeft: "sneak",
-      ControlRight: "sneak",
+      // Ctrl n'est plus « s'accroupir » : c'est la parade, la garde levée
+      // contre une charge. S'accroupir reste sur C.
+      ControlLeft: "block",
+      ControlRight: "block",
       KeyC: "sneak",
     };
 
@@ -680,15 +824,20 @@ export default function MinkebeGame() {
       }
       if (event.code === "KeyF") actionsRef.current.eat();
       if (event.code === "KeyG") actionsRef.current.grill();
+      if (event.code === "KeyB") actionsRef.current.shelter();
+      if (event.code === "KeyN") actionsRef.current.sleep();
+      if (event.code === "KeyI") actionsRef.current.goggles();
       // ⇧O ouvre le vestiaire ; Maj seule reste la course.
       if (event.code === "KeyO" && event.shiftKey) {
         event.preventDefault();
         document.exitPointerLock?.();
         actionsRef.current.dress();
       }
+      // Espace saute. Le tir reste au clic (ou au bouton tactile) : une seule
+      // touche ne peut pas faire les deux sans faire sauter le joueur à chaque
+      // coup de feu.
       if (event.code === "Space") {
-        firingRef.current = true;
-        fireRef.current();
+        if (!event.repeat) inputRef.current.jump = true;
         event.preventDefault();
       }
       if (event.code === "Escape") {
@@ -703,7 +852,7 @@ export default function MinkebeGame() {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code === "Space") firingRef.current = false;
+      if (event.code === "Space") inputRef.current.jump = false;
       const mapped = keyMap[event.code];
       if (mapped) {
         (inputRef.current[mapped] as boolean) = false;
@@ -720,6 +869,8 @@ export default function MinkebeGame() {
         right: false,
         run: false,
         sneak: false,
+        jump: false,
+        block: false,
         joystick: { x: 0, y: 0 },
       };
     };
@@ -996,7 +1147,7 @@ export default function MinkebeGame() {
             <>
               <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-3 p-3 md:p-5">
                 <div className="space-y-2">
-                  <div className="panel-tight px-3 py-2">
+                  <div className="pointer-events-auto panel-tight px-3 py-2">
                     <p className="eyebrow">{clock.phase} · jour {clock.day}</p>
                     <p className="display text-lg leading-tight text-parchment">{zone?.name}</p>
                     <p className="text-[0.65rem] text-mist/60">
@@ -1006,6 +1157,16 @@ export default function MinkebeGame() {
                     </p>
                   </div>
                   <Vitals vitals={hud.vitals} label={(key) => t(key)} />
+                  <LevelBar xp={hud.xp} level={hud.level} label={(key) => t(key)} />
+                  <FieldKit
+                    className="pointer-events-auto"
+                    state={hud}
+                    label={(key) => t(key)}
+                    onBuild={shelterUp}
+                    onSleep={sleep}
+                    onGoggles={goggles}
+                    nearShelter={Boolean(nearestShelter(hud, 3.5))}
+                  />
                   <Objectives state={hud} label={(key) => t(key)} />
                 </div>
 
@@ -1102,6 +1263,19 @@ export default function MinkebeGame() {
                     ? `${heldAmmo.loaded} / ${heldAmmo.reserve}`
                     : "lame"}
                 </p>
+                <div className="flex items-center gap-2 text-[0.6rem] text-parchment/70">
+                  {hud.blocking && (
+                    <span className="rounded-full bg-sky-400/20 px-2 py-0.5">🛡 {t("game.blocking")}</span>
+                  )}
+                  {hud.goggles && (
+                    <span className="rounded-full bg-sky-300/20 px-2 py-0.5 text-sky-200">🥽 {t("game.goggles")}</span>
+                  )}
+                  {hud.height > 0.05 && (
+                    <span className="rounded-full bg-canopy-950/60 px-2 py-0.5 tabular-nums">
+                      {hud.height.toFixed(1)} m
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-2 p-3 md:p-4">
@@ -1123,15 +1297,30 @@ export default function MinkebeGame() {
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Maj</kbd>
                     <span>{t("game.hints.run")}</span>
                     <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Ctrl</kbd>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">C</kbd>
                     <span>{t("game.hints.crouch")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Espace</kbd>
+                    <span>{t("game.hints.jump")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Ctrl</kbd>
+                    <span>{t("game.hints.block")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">B</kbd>
+                    <span>{t("game.hints.shelter")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">N</kbd>
+                    <span>{t("game.hints.sleep")}</span>
+                    <span className="text-mist/30">·</span>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">I</kbd>
+                    <span>{t("game.hints.goggles")}</span>
                     <span className="text-mist/30">·</span>
                     <span>{t("game.hints.aim")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">clic</kbd>
                     <span>{t("game.hints.fire")}</span>
                     <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">1-5</kbd>
+                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">1-6</kbd>
                     <span>{t("game.hints.weapons")}</span>
                     <span className="text-mist/30">·</span>
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">R</kbd>
@@ -1234,6 +1423,40 @@ export default function MinkebeGame() {
               <div className="absolute bottom-44 right-4 z-20 flex flex-col items-end gap-2 md:hidden">
                 <button
                   type="button"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    inputRef.current.jump = true;
+                  }}
+                  onPointerUp={() => {
+                    inputRef.current.jump = false;
+                  }}
+                  className="grid h-14 w-14 place-items-center rounded-full border border-moss-300/50 bg-canopy-900/70 text-lg backdrop-blur active:scale-95"
+                  aria-label={t("game.hints.jump")}
+                >
+                  ⤒
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    inputRef.current.block = true;
+                    sceneRef.current?.setAiming(true);
+                  }}
+                  onPointerUp={() => {
+                    inputRef.current.block = false;
+                    sceneRef.current?.setAiming(false);
+                  }}
+                  onPointerLeave={() => {
+                    inputRef.current.block = false;
+                    sceneRef.current?.setAiming(false);
+                  }}
+                  className="grid h-11 w-11 place-items-center rounded-full border border-sky-300/40 bg-canopy-900/70 text-sm backdrop-blur active:scale-95"
+                  aria-label={t("game.hints.block")}
+                >
+                  🛡
+                </button>
+                <button
+                  type="button"
                   onClick={reload}
                   className="grid h-11 w-11 place-items-center rounded-full border border-mist/25 bg-canopy-900/70 text-sm backdrop-blur active:scale-95"
                   aria-label={t("game.reload")}
@@ -1330,9 +1553,10 @@ export default function MinkebeGame() {
                     )}
                   </p>
 
-                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     {[
                       { label: t("game.deathScore"), value: `${hud.death.score}` },
+                      { label: t("game.level"), value: `${hud.level}` },
                       { label: t("game.deathRank"), value: boardRank ? `#${boardRank}` : "—" },
                       { label: t("game.mewas"), value: `${mewasFound(hud.mewas)}/${MEWA_COUNT}` },
                       {
@@ -1353,6 +1577,13 @@ export default function MinkebeGame() {
                       </div>
                     ))}
                   </div>
+
+                  <p className="text-[0.7rem] text-mist/60">
+                    ⭐ {Math.round(hud.xp)} XP
+                    {hud.xp >= SURVIVAL_PRIZE_XP
+                      ? ` · 🏆 ${t("game.prizeWon")}`
+                      : ` · 🏆 ${t("game.survivalPrizeAt")}`}
+                  </p>
 
                   <div className="flex flex-wrap items-center gap-2">
                     <button type="button" className="btn btn-primary" onClick={restart}>
@@ -1648,13 +1879,13 @@ function Objectives({ state, label }: { state: GameState; label: (key: Dictionar
       <ul className="space-y-0.5">
         {status.objectives.map((entry) => (
           <li
-            key={entry.objective.label}
+            key={entry.objective.id}
             className={`flex items-baseline gap-1.5 text-[0.68rem] ${
               entry.done ? "text-parchment" : "text-mist/70"
             }`}
           >
             <span className={entry.done ? "text-amber-glow" : "text-mist/40"}>{entry.done ? "✓" : "·"}</span>
-            <span className="flex-1 leading-snug">{label(entry.objective.label as DictionaryKey)}</span>
+            <span className="flex-1 leading-snug">{label(entry.label as DictionaryKey)}</span>
             <span className="tabular-nums text-[0.62rem] text-mist/50">
               {entry.current}/{entry.target}
             </span>
@@ -1714,6 +1945,116 @@ function Vitals({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * La barre de niveau.
+ *
+ * Cinquante niveaux, 2 500 XP pour le Prix de Survie : c'est la colonne
+ * vertébrale du jeu. Elle reste sous les jauges de survie, parce que survivre
+ * et progresser sont la même boucle — on ne monte pas en regardant la forêt,
+ * on monte en la traversant.
+ */
+function LevelBar({
+  xp,
+  level,
+  label,
+}: {
+  xp: number;
+  level: number;
+  label: (key: DictionaryKey) => string;
+}) {
+  const progress = levelProgress(xp);
+  const prize = progress.prize;
+  return (
+    <div className="panel-tight w-44 space-y-1 px-3 py-2">
+      <div className="flex items-baseline justify-between text-[0.58rem] uppercase tracking-wider text-mist/55">
+        <span>
+          {label("game.level")} <span className="tabular-nums text-parchment">{level}</span>
+        </span>
+        <span className="tabular-nums">{Math.round(xp)} XP</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-canopy-700">
+        <div
+          className={`h-full rounded-full ${prize ? "bg-sky-300" : "bg-moss-300"} transition-[width] duration-500`}
+          style={{ width: `${Math.round(progress.ratio * 100)}%` }}
+        />
+      </div>
+      <p className="text-[0.55rem] leading-tight text-mist/45">
+        {prize
+          ? `${label("game.prizeWon")} · ${label("game.survivalPrize")}`
+          : `${progress.span - progress.into} XP ${label("game.nextLevel")} · ${label("game.survivalPrize")}`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Ce que l'on porte sur le dos.
+ *
+ * Trois chiffres qui changent une partie : le bois (un abri coûte cinq fagots),
+ * les fruits, et l'état de la garde. Ils n'ont pas besoin d'un panneau plein
+ * écran — un regard suffit.
+ */
+function FieldKit({
+  state,
+  label,
+  onBuild,
+  onSleep,
+  onGoggles,
+  nearShelter,
+  className = "",
+}: {
+  state: GameState;
+  label: (key: DictionaryKey) => string;
+  onBuild: () => void;
+  onSleep: () => void;
+  onGoggles: () => void;
+  nearShelter: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={`panel-tight w-44 space-y-1 px-3 py-2 text-[0.62rem] text-mist/70 ${className}`}>
+      <div className="flex items-center justify-between">
+        <span>🪵 {state.wood}</span>
+        <span>🍈 {state.fruits}</span>
+        <span>🏠 {state.shelters.length}</span>
+      </div>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          onClick={onBuild}
+          className={`flex-1 rounded-full border px-1.5 py-1 text-[0.58rem] transition ${
+            state.wood >= SHELTER_WOOD
+              ? "border-amber-glow/50 text-parchment hover:bg-amber-glow/10"
+              : "border-mist/15 text-mist/40"
+          }`}
+        >
+          🏠 {label("game.shelterBuild")} <kbd className="opacity-50">B</kbd>
+        </button>
+        <button
+          type="button"
+          onClick={onGoggles}
+          className={`rounded-full border px-1.5 py-1 text-[0.58rem] transition ${
+            state.goggles ? "border-sky-300/70 text-sky-200" : "border-mist/15 text-mist/50"
+          }`}
+          aria-pressed={state.goggles}
+          title={label("game.goggles")}
+        >
+          🥽 <kbd className="opacity-50">I</kbd>
+        </button>
+      </div>
+      {nearShelter && (
+        <button
+          type="button"
+          onClick={onSleep}
+          className="w-full rounded-full border border-moss-300/50 px-1.5 py-1 text-[0.58rem] text-parchment transition hover:bg-moss-300/10"
+        >
+          🌙 {label("game.sleep")} <kbd className="opacity-50">N</kbd>
+        </button>
+      )}
     </div>
   );
 }

@@ -50,6 +50,7 @@ const {
   grillMeat,
   weaveOutfit,
   restartExpedition,
+  getOutfit,
   SAVE_VERSION,
 } = await import(`${bundle}?t=${Date.now()}`);
 await rm(dir, { recursive: true, force: true });
@@ -238,17 +239,32 @@ check(
 // ------------------------------------------------------------------
 console.log("\nLes Fils de Rêve");
 const poor = { ...state, threads: 1 };
-check("sans fils, pas de tenue", weaveOutfit(poor, "reve").code === "weave.threads");
+// La première tenue tissée est la Fée des étoiles : huit Fils de Rêve.
+check("sans fils, pas de tenue", weaveOutfit(poor, "fee-etoiles").code === "weave.threads");
 const rich = { ...state, threads: 30 };
-const woven = weaveOutfit(rich, "reve");
+const woven = weaveOutfit(rich, "fee-etoiles");
 check("avec assez de fils, la tenue est tissée", woven.code === "weave.ok");
-check("les fils sont dépensés", woven.state.threads === 30 - 6, `${woven.state.threads} restants`);
-check("la tenue est gardée", woven.state.woven.includes("reve"));
-check("on ne la tisse pas deux fois", weaveOutfit(woven.state, "reve").code === "weave.owned");
+check("les fils sont dépensés", woven.state.threads === 30 - 8, `${woven.state.threads} restants`);
+check("la tenue est gardée", woven.state.woven.includes("fee-etoiles"));
+check("on ne la tisse pas deux fois", weaveOutfit(woven.state, "fee-etoiles").code === "weave.owned");
+// Les quatre tenues nommées existent, avec leurs effets.
+for (const [id, cost] of [
+  ["fee-etoiles", 8],
+  ["nenuphar", 12],
+  ["murmure", 16],
+  ["purificatrice", 20],
+]) {
+  const outfit = getOutfit(id);
+  check(`la tenue ${id} coûte ${cost} fils`, outfit.threads === cost, `${outfit.threads}`);
+}
+check("Fée des étoiles fait planer", getOutfit("fee-etoiles").power === "glide");
+check("Nénuphar marche sur l'eau", getOutfit("nenuphar").power === "water");
+check("Murmure apprivoise", getOutfit("murmure").power === "tame");
+check("Purificatrice calme", getOutfit("purificatrice").power === "calm");
 
 const afterDeath = restartExpedition({ ...woven.state, death: { cause: "soif", at: 10, score: 400 } });
 check("la nouvelle expédition repart à neuf", afterDeath.death === null && afterDeath.elapsed === 0);
-check("les tenues tissées sont conservées", afterDeath.woven.includes("reve"));
+check("les tenues tissées sont conservées", afterDeath.woven.includes("fee-etoiles"));
 check(
   "les Mewas sont de nouveau dix",
   mewasFound(afterDeath.mewas) === 0 && afterDeath.mewas.length === MEWA_COUNT,
@@ -261,7 +277,7 @@ console.log("\nLa sauvegarde");
 const saved = deserialize(JSON.parse(JSON.stringify(serialize(woven.state))));
 check("version de sauvegarde à jour", SAVE_VERSION === 6, `v${SAVE_VERSION}`);
 check("les fils survivent", saved.threads === woven.state.threads);
-check("les tenues survivent", saved.woven.includes("reve"));
+check("les tenues survivent", saved.woven.includes("fee-etoiles"));
 check(
   "les Mewas ramassés restent ramassés",
   mewasFound(saved.mewas) === mewasFound(woven.state.mewas),

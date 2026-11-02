@@ -177,7 +177,7 @@ Le personnage et les armes ont leurs propres modules de rendu :
 | Module | Rôle |
 |---|---|
 | `src/components/HumanModel.ts` | Squelette articulé, animation, IK des bras |
-| `src/components/WeaponModels.ts` | Les cinq armes, détachées de toute main |
+| `src/components/WeaponModels.ts` | Les six armes, détachées de toute main |
 | `src/components/WeaponView.ts` | Vue subjective : avant-bras et arme devant la caméra |
 
 Principes de rendu :
@@ -283,7 +283,7 @@ Comportement : la harde apparaît entre 24 et 46 unités (derrière la brume),
 paît, erre, fuit quand le joueur fait du bruit, charge pour les espèces
 agressives, et disparaît au-delà de 90 unités.
 
-Cinq armes, tenues en main avec deux avant-bras :
+Six armes, tenues en main avec deux avant-bras :
 
 | Arme | Dégâts | Portée | Particularité |
 |---|---|---|---|
@@ -292,6 +292,7 @@ Cinq armes, tenues en main avec deux avant-bras :
 | Lance de chasse | 70 | 3,1 | Plus longue, plus lente |
 | Pistolet 9 mm | 58 | 55 | 12 coups, rechargement rapide |
 | Carabine M16 | 96 | 150 | Rafale, 30 coups, bruit énorme |
+| Fusil à pompe cal. 12 | 165 | 38 | Six chevrotines, arrêt net à courte portée |
 
 Un tir à la tête multiplie les dégâts par 1,6 à 2,4 selon l'arme ; la distance
 réduit les dégâts de 30 % au maximum. Une bête abattue laisse une carcasse :
@@ -301,6 +302,43 @@ tableau de chasse sont sauvegardés avec l'expédition.
 
 Contrôle : `npm run check:hunt` (balistique, munitions, dépeçage, géométrie
 des rives, comportement de la harde).
+
+## Survivre
+
+La survie n'est pas un mode à part : c'est la partie. Quatre jauges restent à
+l'écran — santé, faim, soif, endurance.
+
+- **Eau** (`E` près de la berge) : +32 de soif. La soif baisse d'environ
+  0,06 par seconde ; sous 15, la santé fond.
+- **Fruits** (`F`) : +22 de faim, ramassés en marchant (huit au sac).
+- **Viande grillée** (`G`, au feu du camp) : +46 de faim et +8 de santé.
+- **Endurance** : la course, le saut (`Espace`, 7 points) et la parade la
+  vident ; marcher la recharge.
+- **Santé à zéro** : l'expédition se termine. La cause (soif, faim, blessure)
+  décide du texte de fin, le score part au classement.
+
+**L'abri** (`B`) coûte cinq fagots de bois mort, ramassés en marchant. Il faut
+un terrain à peu près plat et douze mètres entre deux abris. Sous l'abri, `N`
+dort deux heures : +38 de santé, endurance pleine — au prix de la soif et de la
+faim, qui continuent de descendre.
+
+**Les dangers** : le potamochère et le buffle de forêt chargent sans sommation.
+La garde (clic droit ou `Ctrl`) transforme le choc en perte d'endurance ; un
+saut par-dessus la charge (`Espace`) l'annule complètement. La nuit tombe
+vraiment : les lunettes infrarouges (`I`) amplifient la lumière et teintent
+l'image en vert.
+
+**Les niveaux** : cinquante paliers, 2 500 XP pour le Prix de Survie. L'XP vient
+des bêtes abattues, de la viande dépecée, des espèces observées, des zones
+découvertes, des Mewas (+40), des abris (+60) et des nuits passées à l'abri.
+L'expérience et les tenues survivent à la mort ; la carte, le tableau de chasse
+et les abris, non.
+
+**Les Mewas** : dix créatures blanches aux oreilles bleues, disséminées entre 40
+et 190 mètres du camp. Elles flottent, errent, et s'approchent par curiosité.
+Au contact, elles laissent deux à quatre Fils de Rêve, qui se tissent en quatre
+tenues nommées — *Fée des étoiles* (planer), *Nénuphar* (marcher sur l'eau),
+*Murmure des bêtes* (apprivoiser), *Purificatrice* (calmer les prédateurs).
 
 ## Bande-annonce
 
@@ -401,7 +439,7 @@ calculés image par image.
   direction de visée, les mains viennent la chercher. Une arme collée à la main
   ne peut pas viser juste.
 
-Les cinq armes de `WeaponModels.ts` sont les mêmes objets dans les deux vues :
+Les six armes de `WeaponModels.ts` sont les mêmes objets dans les deux vues :
 seule la mise en scène change (bras devant la caméra, ou squelette entier).
 
 `npm run check:human` mesure ce qui doit être vrai — taille, pieds au sol,
@@ -433,7 +471,11 @@ Régénération complète : `npm run assets -- --force`.
 
 ## Accessibilité
 
-- Contrôles clavier complets (WASD/ZQSD, flèches, Maj, Ctrl, M, Échap) et tactile.
+- Contrôles clavier complets : WASD/ZQSD, flèches, Maj (courir), C (s'accroupir),
+  **Espace (sauter)**, **Ctrl ou clic droit (parade)**, clic (tirer), 1-6 (armes),
+  R (recharger), E (boire / dépecer), F (manger), G (griller), **B (bâtir un abri)**,
+  **N (dormir sous l'abri)**, **I (lunettes infrarouges)**, ⇧O (vestiaire),
+  V (vue), M (carte), Échap (pause). Tactile : joystick, saut, parade, tir.
 - `prefers-reduced-motion` réduit la végétation, les insectes et les animations.
 - Interface contrastée, libellés ARIA sur la scène, la carte et les curseurs.
 - Aucun son obligatoire ; les ambiances s'affichent aussi en texte.

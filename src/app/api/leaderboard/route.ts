@@ -17,7 +17,8 @@ const SubmitSchema = z.object({
   score: z.number().finite().min(0).max(999_999),
   cause: z.enum(["soif", "faim", "blessure"]),
   mewas: z.number().int().min(0).max(10).optional(),
-  level: z.number().int().min(1).max(5).optional(),
+  // Niveau du joueur (1-50), pas le numéro de chapitre.
+  level: z.number().int().min(1).max(50).optional(),
   seconds: z.number().min(0).max(60 * 60 * 12).optional(),
 });
 

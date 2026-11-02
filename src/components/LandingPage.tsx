@@ -246,6 +246,65 @@ export default function LandingPage() {
       </section>
 
       {/* ------------------------------------------------------------------ */}
+      {/* Comment on survit                                                  */}
+      {/* ------------------------------------------------------------------ */}
+      <section id="survie" className="mx-auto max-w-6xl px-5 py-16">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="eyebrow">{t("survival.kicker")}</p>
+            <h2 className="display mt-1 text-2xl text-parchment sm:text-3xl">{t("survival.title")}</h2>
+          </div>
+          <p className="max-w-md text-[0.72rem] leading-relaxed text-mist/55">{t("survival.lede")}</p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {(
+            [
+              { icon: "🪵", title: "survival.shelter.title", desc: "survival.shelter.desc", key: "B" },
+              { icon: "🛡️", title: "survival.guard.title", desc: "survival.guard.desc", key: "Ctrl" },
+              { icon: "🔫", title: "survival.weapons.title", desc: "survival.weapons.desc", key: "1-6" },
+              { icon: "🏆", title: "survival.levels.title", desc: "survival.levels.desc", key: "XP" },
+            ] as const
+          ).map((card) => (
+            <article key={card.title} className="panel space-y-2 p-5">
+              <div className="flex items-start justify-between gap-2">
+                <span
+                  aria-hidden
+                  className="grid h-10 w-10 place-items-center rounded-lg border border-amber-glow/25 bg-amber-glow/10 text-lg"
+                >
+                  {card.icon}
+                </span>
+                <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 text-[0.6rem] text-parchment/80">
+                  {card.key}
+                </kbd>
+              </div>
+              <h3 className="text-sm font-semibold text-parchment">{t(card.title)}</h3>
+              <p className="text-[0.7rem] leading-relaxed text-mist/60">{t(card.desc)}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {(
+            [
+              { name: "outfit.fee-etoiles", icon: "✨" },
+              { name: "outfit.nenuphar", icon: "🪷" },
+              { name: "outfit.murmure", icon: "🐾" },
+              { name: "outfit.purificatrice", icon: "🕊️" },
+            ] as const
+          ).map((outfit) => (
+            <div
+              key={outfit.name}
+              className="flex items-center gap-2 rounded-xl border border-sky-300/20 bg-sky-400/[0.06] px-3 py-2"
+            >
+              <span aria-hidden>{outfit.icon}</span>
+              <span className="text-[0.7rem] text-parchment/85">{t(outfit.name)}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
       {/* Installer / soutenir — une seule section, deux colonnes            */}
       {/* ------------------------------------------------------------------ */}
       <section id="soutenir" className="mx-auto max-w-6xl px-5 py-16">

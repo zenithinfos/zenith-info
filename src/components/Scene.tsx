@@ -32,6 +32,7 @@ import {
 import { terrainHeight } from "@/game/terrain";
 import { type Animal } from "@/game/animals";
 import { type MewaState } from "@/game/mewas";
+import { type Shelter } from "@/game/engine";
 import { type WeaponId } from "@/game/hunting";
 import {
   createWaterSurface,
@@ -110,7 +111,21 @@ function slashAny(rig: HumanRig): void {
 export type SceneView = "premier" | "troisieme";
 
 export interface SceneController {
-  setPlayer: (position: [number, number, number], heading: number, motion: string) => void;
+  /**
+   * Position du joueur, orientation, allure — et hauteur au-dessus du sol, qui
+   * porte le saut. Sans elle, sauter ne se verrait pas : la caméra resterait
+   * collée au terrain pendant que la simulation, elle, décolle.
+   */
+  setPlayer: (
+    position: [number, number, number],
+    heading: number,
+    motion: string,
+    height?: number,
+  ) => void;
+  /** Abris bâtis : lit, feu de camp, drapeau du Gabon. */
+  setShelters: (shelters: Shelter[]) => void;
+  /** Lunettes infrarouges : amplification de lumière et image verte. */
+  setGoggles: (on: boolean) => void;
   setEnvironment: (opts: {
     hour: number;
     daylight: number;
@@ -1423,6 +1438,183 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     };
 
     // ------------------------------------------------------------------
+    // Abris : un lit, un feu, un drapeau
+    // ------------------------------------------------------------------
+    // Un abri n'est pas un décor posé là : c'est le seul endroit de la forêt
+    // que le joueur a construit. Il doit donc se lire de loin — le feu surtout,
+    // qui est la seule lumière chaude de la nuit.
+
+    const shelterGroup = new THREE.Group();
+    shelterGroup.name = "shelters";
+    scene.add(shelterGroup);
+
+    const shelterWood = new THREE.MeshStandardMaterial({
+      color: 0x5a4130,
+      roughness: 0.92,
+      metalness: 0,
+    });
+    const shelterBark = new THREE.MeshStandardMaterial({
+      color: 0x6d513c,
+      roughness: 0.96,
+      metalness: 0,
+    });
+    // Toiture : des feuilles de marantacées, larges et mates.
+    const shelterThatch = new THREE.MeshStandardMaterial({
+      color: 0x536030,
+      roughness: 0.98,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    const shelterLeaf = new THREE.MeshStandardMaterial({
+      color: 0x6f7d3d,
+      roughness: 0.95,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    const emberMaterial = new THREE.MeshBasicMaterial({ color: 0xff9a3c });
+
+    // Drapeau du Gabon : trois bandes, vert, or, bleu.
+    const flagMaterials = [0x0f8f57, 0xf2c437, 0x2f6bbf].map(
+      (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, side: THREE.DoubleSide }),
+    );
+
+    const poleGeometry = new THREE.CylinderGeometry(0.055, 0.075, 1, 7);
+    const shelterLogGeometry = new THREE.CylinderGeometry(0.13, 0.15, 1.15, 8);
+    const stoneGeometry = new THREE.DodecahedronGeometry(0.16, 0);
+    const stoneMaterial = new THREE.MeshStandardMaterial({ color: 0x6a6a63, roughness: 0.95 });
+
+    interface ShelterRig {
+      group: THREE.Group;
+      fire: THREE.PointLight;
+    }
+    const shelterRigs = new Map<number, ShelterRig>();
+    let shelterIndexSignature = "";
+
+    /**
+     * Un abri : deux perches fourchues, une faîtière, un toit de feuilles, un
+     * lit de fougères surélevé — on ne dort pas au sol dans un marais —, un
+     * cercle de pierres et de quoi tenir le feu.
+     */
+    const createShelterRig = (shelter: Shelter): ShelterRig => {
+      const group = new THREE.Group();
+      const base = terrainHeight(shelter.x, shelter.z);
+      group.position.set(shelter.x, base, shelter.z);
+      // Chaque abri tourne un peu : trois cabanes identiques, c'est un décor.
+      group.rotation.y = shelter.index * 1.7;
+
+      const pole = (x: number, z: number, height: number, radius = 0.07) => {
+        const mesh = new THREE.Mesh(poleGeometry, shelterBark);
+        mesh.scale.set(radius / 0.065, height, radius / 0.065);
+        mesh.position.set(x, height / 2, z);
+        mesh.rotation.z = x > 0 ? -0.12 : 0.12;
+        group.add(mesh);
+      };
+
+      // Deux poteaux plus hauts à l'arrière, deux plus courts devant.
+      pole(-1.05, 0.95, 1.75, 0.075);
+      pole(1.05, 0.95, 1.75, 0.075);
+      pole(-0.95, -1.05, 1.15, 0.065);
+      pole(0.95, -1.05, 1.15, 0.065);
+
+      // Faîtière et chevrons.
+      const ridge = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.35, 7), shelterWood);
+      ridge.rotation.z = Math.PI / 2;
+      ridge.position.set(0, 1.72, 0.95);
+      group.add(ridge);
+      const rafterGeometry = new THREE.CylinderGeometry(0.04, 0.045, 2.3, 6);
+      for (let i = 0; i < 4; i += 1) {
+        const x = -0.85 + i * 0.57;
+        const rafter = new THREE.Mesh(rafterGeometry, shelterWood);
+        rafter.position.set(x, 1.44, -0.05);
+        rafter.rotation.x = Math.PI / 2 - 0.48;
+        group.add(rafter);
+      }
+
+      // Toiture : trois rangs de feuilles qui se chevauchent.
+      for (let row = 0; row < 3; row += 1) {
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.05, 0.95), shelterThatch);
+        panel.position.set(0, 1.63 - row * 0.19, 0.62 - row * 0.42);
+        panel.rotation.x = -0.46;
+        group.add(panel);
+      }
+
+      // Lit de fougères sur un plancher de rondins : le sol est détrempé.
+      for (let i = 0; i < 4; i += 1) {
+        const plank = new THREE.Mesh(shelterLogGeometry, shelterWood);
+        plank.rotation.x = Math.PI / 2;
+        plank.scale.y = 0.62;
+        plank.position.set(-0.54 + i * 0.36, 0.3, -0.55);
+        group.add(plank);
+      }
+      const mattress = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.16, 1.9), shelterLeaf);
+      mattress.position.set(0, 0.42, -0.5);
+      group.add(mattress);
+
+      // Foyer : cercle de pierres, trois rondins croisés, braise.
+      const fire = new THREE.Group();
+      fire.position.set(0.05, 0, -1.95);
+      for (let i = 0; i < 8; i += 1) {
+        const angle = (i / 8) * Math.PI * 2;
+        const stone = new THREE.Mesh(stoneGeometry, stoneMaterial);
+        stone.position.set(Math.cos(angle) * 0.62, 0.08, Math.sin(angle) * 0.62);
+        stone.rotation.set(angle, angle * 0.7, angle * 0.3);
+        stone.scale.setScalar(0.8 + ((i * 37) % 10) / 40);
+        fire.add(stone);
+      }
+      for (let i = 0; i < 3; i += 1) {
+        const log = new THREE.Mesh(shelterLogGeometry, shelterBark);
+        log.scale.set(0.7, 0.42, 0.7);
+        log.rotation.z = Math.PI / 2;
+        log.rotation.y = (i / 3) * Math.PI;
+        log.position.set(0, 0.16, 0);
+        fire.add(log);
+      }
+      const embers = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 7), emberMaterial);
+      embers.scale.set(1, 0.32, 1);
+      embers.position.y = 0.12;
+      fire.add(embers);
+      const glow = new THREE.PointLight(0xffa24a, 5.5, 13, 2);
+      glow.position.set(0, 0.65, 0);
+      fire.add(glow);
+      group.add(fire);
+
+      // Le drapeau : mât, trois bandes, et la hampe inclinée vers l'est.
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 3.1, 7), shelterWood);
+      mast.position.set(-1.62, 1.55, 0.35);
+      group.add(mast);
+      for (let i = 0; i < 3; i += 1) {
+        const band = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.3, 6, 1), flagMaterials[i]);
+        band.position.set(-1.62 + 0.54, 2.55 - i * 0.3, 0.35);
+        band.rotation.y = -0.22;
+        group.add(band);
+      }
+
+      shelterGroup.add(group);
+      return { group, fire: glow };
+    };
+
+    /** Instantané des abris : on crée les nouveaux, on oublie les anciens. */
+    const syncShelters = (shelters: Shelter[]) => {
+      const signature = shelters.map((shelter) => `${shelter.x.toFixed(2)}:${shelter.z.toFixed(2)}`).join("|");
+      if (signature === shelterIndexSignature) return;
+      shelterIndexSignature = signature;
+      const seen = new Set<number>();
+      for (const shelter of shelters) {
+        seen.add(shelter.index);
+        if (!shelterRigs.has(shelter.index)) {
+          shelterRigs.set(shelter.index, createShelterRig(shelter));
+        }
+      }
+      for (const [index, rig] of shelterRigs) {
+        if (seen.has(index)) continue;
+        // Les matériaux sont partagés entre abris : les détruire ici casserait
+        // les autres. On retire le groupe, c'est tout.
+        shelterGroup.remove(rig.group);
+        shelterRigs.delete(index);
+      }
+    };
+
+    // ------------------------------------------------------------------
     // Arme en main
     // ------------------------------------------------------------------
     const viewModel: ViewModel = createViewModel();
@@ -1665,6 +1857,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           uTime: { value: 0 },
           uVignette: { value: 0.18 },
           uGrain: { value: 0.035 },
+          uGoggles: { value: 0 },
         },
         vertexShader: `
           varying vec2 vUv;
@@ -1678,6 +1871,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           uniform float uTime;
           uniform float uVignette;
           uniform float uGrain;
+          uniform float uGoggles;
           varying vec2 vUv;
 
           float rand(vec2 co) {
@@ -1708,6 +1902,21 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
             float grain = (rand(vUv * 1024.0 + uTime * 60.0) - 0.5) * uGrain;
             colour += grain;
 
+            // Lunettes infrarouges : amplification, image verte, balayage. Ce
+            // n'est pas un filtre de couleur posé sur l'image — le vert vient
+            // d'une luminance remontée, comme sur un vrai tube.
+            if (uGoggles > 0.001) {
+              vec3 night = colour * (1.0 + uGoggles * 2.1);
+              float lum = dot(night, vec3(0.30, 0.59, 0.11));
+              night = vec3(lum * 0.36, lum * 1.62, lum * 0.78);
+              float scan = 0.93 + 0.07 * sin(vUv.y * 820.0 + uTime * 1.6);
+              night *= scan;
+              // Le bord de l'oculaire : un masque rond, pas un filtre plein écran.
+              vec2 ocular = (vUv - 0.5) * vec2(1.0, 0.94);
+              float mask = smoothstep(0.64, 0.28, length(ocular));
+              colour = mix(colour, night, clamp(uGoggles * mask, 0.0, 1.0));
+            }
+
             gl_FragColor = vec4(colour, 1.0);
           }
         `,
@@ -1735,6 +1944,12 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     let currentMotion = "idle";
     let daylight = 1;
     let aiming = false;
+    /** Hauteur du joueur au-dessus du sol, pilotée par le saut. */
+    let playerHeight = 0;
+    /** Lunettes infrarouges allumées. */
+    let goggles = false;
+    /** Lissage de l'effet, pour ne pas basculer d'un coup. */
+    let gogglesFade = 0;
     /** Dernier instantané de faune reçu du moteur de jeu. */
     let animalSnapshot: Animal[] = [];
     const animalRigs = new Map<number, AnimalRig>();
@@ -1782,8 +1997,11 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
       const inWater = waterDepthAt(playerPosition.x, playerPosition.z) > 0.15;
       const bodyY = inWater
-        ? Math.min(groundUnderPlayer + 1.1, waterLevelAt(playerPosition.x, playerPosition.z) - 0.75)
-        : groundUnderPlayer;
+        ? Math.min(
+            groundUnderPlayer + 1.1 + playerHeight * 0.4,
+            waterLevelAt(playerPosition.x, playerPosition.z) - 0.75,
+          )
+        : groundUnderPlayer + playerHeight;
 
       if (viewMode === "troisieme") {
         playerRig.group.visible = true;
@@ -1813,7 +2031,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       if (viewMode === "premier") {
         camera.position.set(
           playerPosition.x + sway,
-          groundUnderPlayer + HUMAN_EYE_Y + Math.abs(Math.sin(bob)) * bobAmplitude,
+          groundUnderPlayer + playerHeight + HUMAN_EYE_Y + Math.abs(Math.sin(bob)) * bobAmplitude,
           playerPosition.z,
         );
         camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.18);
@@ -2014,6 +2232,8 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
       if (composer) {
         gradePass!.uniforms.uTime.value = elapsed;
+        gogglesFade += ((goggles ? 1 : 0) - gogglesFade) * Math.min(1, dt * 7);
+        gradePass!.uniforms.uGoggles.value = gogglesFade;
         // Le bloom ne doit exister qu'en plein jour : la nuit, il baverait.
         bloomPass!.strength = 0.06 + daylight * 0.24;
         composer.render();
@@ -2024,10 +2244,17 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     animate();
 
     const controller: SceneController = {
-      setPlayer(position, heading, motion) {
+      setPlayer(position, heading, motion, height = 0) {
         playerPosition.set(position[0], 0, position[2]);
         targetHeading = heading;
         currentMotion = motion;
+        playerHeight = height;
+      },
+      setShelters(shelters) {
+        syncShelters(shelters);
+      },
+      setGoggles(on) {
+        goggles = on;
       },
       setEnvironment({ daylight: value, weather, intensity = 0.6 }) {
         daylight = value;
@@ -2054,7 +2281,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         ambient.intensity = budget.ambient;
         hemisphere.intensity = budget.hemisphere;
         moon.intensity = budget.moon;
-        renderer.toneMappingExposure = budget.exposure;
+        // Lunettes : on ouvre l'exposition pour lire le sous-bois de nuit. Le
+        // vert et le balayage sont faits par l'étalonnage, pas ici.
+        const gogglesGain = goggles ? 1 + (1 - value) * 1.5 : 1;
+        renderer.toneMappingExposure = budget.exposure * gogglesGain;
         // La carte d'ambiance est la seule lumière qui atteint le sous-bois :
         // baissée, elle éteint la forêt même en plein jour.
         scene.environmentIntensity = budget.environment;

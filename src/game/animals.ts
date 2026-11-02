@@ -211,6 +211,28 @@ export const ANIMAL_BUILDS: Record<string, SpeciesBuild> = {
     hitRadius: 0.16,
     mass: 5,
   },
+  buffle: {
+    kind: "quadrupede",
+    shoulder: 1.25,
+    length: 2.0,
+    girth: 0.52,
+    neck: 0.3,
+    head: 0.44,
+    muzzle: 0.4,
+    ears: 0.26,
+    horn: "defense",
+    hornLength: 0.55,
+    tail: 0.6,
+    coat: 0x2f2a24,
+    belly: 0x3d362d,
+    accent: 0x171412,
+    pattern: "uni",
+    health: 420,
+    fleeSpeed: 4.2,
+    meat: 210,
+    hitRadius: 0.55,
+    mass: 420,
+  },
   potamochere: {
     kind: "quadrupede",
     shoulder: 0.72,
@@ -369,6 +391,17 @@ export interface HerdContext {
   /** 0 = forêt vide, 1 = foisonnement. */
   abundance?: number;
   seed?: number;
+  /**
+   * Tenue « Murmure des bêtes » : les animaux ne fuient plus et suivent le
+   * joueur. Ce n'est pas un charme magique, c'est un comportement : ils
+   * s'habituent à lui au lieu de le craindre.
+   */
+  tame?: boolean;
+  /**
+   * Tenue « Purificatrice » : aucun prédateur ne charge. Les bêtes restent
+   * sur leurs gardes, mais la charge s'arrête à la menace.
+   */
+  calm?: boolean;
 }
 
 export const MAX_ANIMALS = 14;
@@ -456,9 +489,27 @@ export function stepHerd(
     const aggressive = species?.behavior === "agressif";
     const canCharge = aggressive && animal.speciesId !== "crocodile";
 
+    // La tenue de calme coupe la charge à la source : une bête qui ne charge
+    // pas n'a pas besoin d'être esquivée.
+    const chargeAllowed = canCharge && !ctx.calm;
+
+    if (animal.state === "charge" && ctx.calm) {
+      animal.state = "errance";
+      animal.timer = 2 + random() * 2;
+    }
+
     if (animal.state !== "charge" && animal.state !== "fuite") {
-      if (animal.alert > 0.75 && dist < detection * 0.55) {
-        if (canCharge && dist < detection * 0.34 && animal.health > build.health * 0.4) {
+      if (ctx.tame) {
+        // Apprivoisée : elle vient. On la fait errer vers le joueur, sans la
+        // coller à ses bottes — une harde qui traverse la forêt, pas un chien.
+        if (dist > 4.5) {
+          animal.wander = Math.atan2(dx, dz);
+          animal.speed = Math.min(build.fleeSpeed * 0.3, 1.4);
+          animal.state = "errance";
+          animal.heading += (animal.wander - animal.heading) * dt * 1.4;
+        }
+      } else if (animal.alert > 0.75 && dist < detection * 0.55) {
+        if (chargeAllowed && dist < detection * 0.34 && animal.health > build.health * 0.4) {
           animal.state = "charge";
           animal.timer = 3.5;
         } else {

@@ -21,6 +21,12 @@ export const HUMAN_HOLD: Record<WeaponId, Hold> = {
     aim: { position: [0.055, 1.335, -0.44], yaw: 0 },
     carry: { position: [0.235, 1.0, 0.02], rotation: [-1.44, 0.16, 0.08] },
   },
+  fusil: {
+    grip: [0, -0.05, 0.03],
+    fore: [0, -0.016, -0.3],
+    aim: { position: [0.155, 1.32, -0.3], yaw: -0.08 },
+    carry: { position: [0.26, 1.0, 0.02], rotation: [-1.42, 0.14, 0.06] },
+  },
   m16: {
     grip: [0, -0.05, 0.03],
     fore: [0, 0, -0.18],

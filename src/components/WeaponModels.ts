@@ -246,8 +246,51 @@ function spear(): { group: THREE.Group; materials: THREE.Material[] } {
   return { group, materials: [wood, steel, bindingMaterial] };
 }
 
+/** Fusil à pompe : canon long, tube sous le canon, bois clair. */
+function shotgun(): { group: THREE.Group; materials: THREE.Material[] } {
+  const group = new THREE.Group();
+  const steel = steelMaterial();
+  const wood = woodMaterial();
+
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.62, 12), steel);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.022, -0.46);
+  group.add(barrel);
+
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.46, 12), steel);
+  tube.rotation.x = Math.PI / 2;
+  tube.position.set(0, -0.014, -0.36);
+  group.add(tube);
+
+  // Pompe : c'est la forme qui distingue un fusil à pompe d'une carabine.
+  const pump = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.044, 0.16), wood);
+  pump.position.set(0, -0.016, -0.3);
+  group.add(pump);
+
+  const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.062, 0.19), steel);
+  receiver.position.set(0, 0.006, -0.06);
+  group.add(receiver);
+
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.072, 0.26), wood);
+  stock.position.set(0, -0.012, 0.14);
+  stock.rotation.x = -0.06;
+  group.add(stock);
+
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.075, 0.04), wood);
+  grip.position.set(0, -0.05, 0.03);
+  grip.rotation.x = -0.32;
+  group.add(grip);
+
+  const bead = new THREE.Mesh(new THREE.SphereGeometry(0.006, 8, 6), steel);
+  bead.position.set(0, 0.045, -0.72);
+  group.add(bead);
+
+  return { group, materials: [steel, wood] };
+}
+
 const BUILDERS: Record<WeaponId, () => { group: THREE.Group; materials: THREE.Material[] }> = {
   pistolet: pistol,
+  fusil: shotgun,
   m16,
   couteau: () => edged(false),
   machette: () => edged(true),
@@ -259,6 +302,11 @@ const GRIPS: Record<WeaponId, { muzzle: THREE.Vector3Tuple; grip: THREE.Vector3T
     muzzle: [0, 0.028, -0.18],
     grip: [0, -0.045, 0.03],
     fore: [-0.03, -0.052, 0.015],
+  },
+  fusil: {
+    muzzle: [0, 0.022, -0.77],
+    grip: [0, -0.05, 0.03],
+    fore: [0, -0.016, -0.3],
   },
   m16: {
     muzzle: [0, 0.012, -0.66],
