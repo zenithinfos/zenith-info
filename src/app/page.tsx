@@ -10,7 +10,7 @@ import { APP_NAME, GAME_VERSION } from "@/lib/version";
 export const metadata = {
   title: { absolute: `${APP_NAME} — le jeu de la forêt de l'Ogooué-Ivindo` },
   description:
-    "Explorez la forêt de Minkébé, dans la province de l'Ogooué-Ivindo au Gabon : pister 10 espèces, chasser, dépecer, cartographier 8 zones, jouer jusqu'à 8. Jeu 3D dans le navigateur.",
+    "Survivez dans la forêt de Minkébé, province de l'Ogooué-Ivindo au Gabon : soif, faim, abris de cinq bois, charges de potamochères et de buffles, dix Mewas à trouver, cinquante niveaux. Jeu 3D dans le navigateur.",
   alternates: {
     canonical: "/",
     languages: {
