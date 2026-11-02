@@ -1,0 +1,53 @@
+{
+  "name": "zenith-info",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minkébé — jeu d'exploration 3D, multijoueur et distribution (Next.js 16 · Three.js · PostgreSQL)",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "assets": "node scripts/gen-assets.mjs",
+    "package": "node scripts/package-downloads.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "check:forest": "node scripts/check-forest.mjs",
+    "check:hunt": "node scripts/check-hunt.mjs",
+    "check:human": "node scripts/check-human.mjs",
+    "check:mewas": "node scripts/check-mewas.mjs",
+    "check:progression": "node scripts/check-progression.mjs",
+    "check:xp": "node scripts/check-xp.mjs",
+    "check:palette": "node scripts/check-palette.mjs",
+    "check:light": "node scripts/check-light.mjs",
+    "preview:water": "node scripts/preview-water.mjs --size 640x360 --ss 2 --out ./preview",
+    "preview:faune": "node scripts/preview-animals.mjs --out ./preview/faune.png",
+    "preview:perso": "node scripts/check-human.mjs --out ./preview/personnage.png",
+    "preview:scene": "node scripts/preview-scene.mjs --size 480x270 --out ./preview",
+    "trailer": "node scripts/game-trailer.mjs",
+    "trailer:still": "node scripts/game-trailer.mjs --still 240,420,600,780"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "next": "16.4.3",
+    "postgres": "4.0.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "three": "0.187.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.187.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.3",
+    "sharp": "0.35.5",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3"
+  }
+}

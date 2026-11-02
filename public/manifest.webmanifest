@@ -1,0 +1,96 @@
+{
+  "name": "MINKÉBÉ — le jeu de la forêt gabonaise",
+  "short_name": "MINKÉBÉ",
+  "description": "Jeu de survie et d'exploration dans la réserve de Minkébé (Gabon) : pister la faune, chasser, dépecer, cartographier les bais, jouer jusqu'à 8.",
+  "lang": "fr",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "browser"
+  ],
+  "orientation": "landscape",
+  "background_color": "#060d09",
+  "theme_color": "#0a1610",
+  "categories": [
+    "games",
+    "education",
+    "nature"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-96.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/images/menu-forest.jpg",
+      "sizes": "1600x900",
+      "type": "image/jpeg",
+      "form_factor": "wide",
+      "label": "Canopée de la réserve de Minkébé"
+    },
+    {
+      "src": "/images/menu-palms.jpg",
+      "sizes": "1600x900",
+      "type": "image/jpeg",
+      "form_factor": "wide",
+      "label": "Palmeraies et bais de la réserve"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Jouer",
+      "url": "/#jeu",
+      "description": "Lancer une expédition"
+    },
+    {
+      "name": "Télécharger",
+      "url": "/#telecharger",
+      "description": "Clients Windows, macOS, Android"
+    },
+    {
+      "name": "Soutenir",
+      "url": "/#soutenir",
+      "description": "Formules et paiement"
+    }
+  ]
+}
