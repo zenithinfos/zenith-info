@@ -16,7 +16,8 @@ import {
   qualityBudget,
 } from "@/game/sceneConfig";
 import { WATER_BODIES, rainParams, waterDepthAt, waterLevelAt } from "@/game/water";
-import { DEFAULT_START, ZONES } from "@/game/levels";
+import { DEFAULT_START, SPAWN_CLEARING, ZONES } from "@/game/levels";
+import { configureCollision } from "@/game/collision";
 import {
   buildTile,
   plantCards,
@@ -55,10 +56,8 @@ import {
   type HumanRig,
 } from "./HumanModel";
 import {
-  disposeAvatar,
   equipAvatarWeapon,
   kickAvatarRig,
-  loadAvatarRig,
   poseAvatar,
   slashAvatarRig,
   type AvatarRig,
@@ -184,9 +183,6 @@ export interface SceneProps {
  * azimut marqué : lumière rasante d'avant la pluie, typique du bassin du Congo.
  */
 const SUN_OFFSET = { x: 52, y: 62, z: 30 };
-
-/** Rayon de la trouée laissée autour du point de départ (camp). */
-const SPAWN_CLEARING = 7;
 
 const TILE_RADIUS_DESKTOP = 3;
 const TILE_RADIUS_MOBILE = 2;
@@ -640,8 +636,12 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       treeDensity: isMobile || reduced ? 0.042 : 0.058,
       understoryDensity: isMobile || reduced ? 0.3 : 0.46,
       logDensity: 0.0025,
-      clearing: { x: 0, z: 6, radius: SPAWN_CLEARING },
+      clearing: { ...SPAWN_CLEARING },
     };
+    // Les mêmes tuiles, pour la collision : le fût qu'on voit est celui qui
+    // arrête. Sur mobile la densité baisse — la collision doit suivre, sinon
+    // on bute sur des arbres qui n'existent pas.
+    configureCollision(TILE_OPTIONS);
 
     // Géométries et matériaux partagés par toutes les tuiles.
     // Cylindre effilé, ouvert : le fût s'affine vers le haut et les branches
@@ -1628,40 +1628,18 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // Il n'est visible qu'à l'épaule, mais il est construit dans tous les cas :
     // basculer de vue ne doit jamais provoquer de génération d'uniformes au
     // milieu d'un mouvement.
-    // On démarre sur le corps procédural : il est disponible tout de suite,
-    // sans requête réseau, et le jeu est jouable même si le maillage n'arrive
-    // jamais. Le modèle importé prend sa place dès qu'il est chargé.
-    let playerRig: HumanRig = createHumanRig();
+    // Un seul corps, et c'est celui qu'on a sculpté.
+    //
+    // Le jeu chargeait auparavant `explorateur.glb` par-dessus : un homme en
+    // redingote et chapeau melon, choisi comme bouche-trou faute de maillage
+    // libre de droits. Il remplaçait le personnage une seconde après le
+    // premier rendu — un Européen du XIXe siècle au milieu de la forêt du
+    // Gabon. Le corps procédural est moins détaillé, mais c'est le bon homme,
+    // habillé pour le terrain, et il ne dépend d'aucun téléchargement.
+    const playerRig: HumanRig = createHumanRig();
     setHumanWeapon(playerRig, "machette");
-    // Le maillage arrive après le premier rendu : il faut lui rendre l'arme
-    // que le joueur a déjà choisie entre-temps.
-    let requestedWeapon: WeaponId = "machette";
     playerRig.group.visible = false;
     scene.add(playerRig.group);
-
-    let avatarDisposed = false;
-    void loadAvatarRig()
-      .then((avatar) => {
-        if (!avatar) return;
-        if (avatarDisposed) {
-          disposeAvatar(avatar);
-          return;
-        }
-        // On reprend la position et l'orientation du corps de remplacement.
-        avatar.group.position.copy(playerRig.group.position);
-        avatar.group.rotation.copy(playerRig.group.rotation);
-        avatar.group.visible = playerRig.group.visible;
-        equipAvatarWeapon(avatar, requestedWeapon);
-        scene.remove(playerRig.group);
-        playerRig.group.traverse((child) => {
-          if (child instanceof THREE.Mesh) child.geometry.dispose();
-        });
-        scene.add(avatar.group);
-        playerRig = avatar;
-      })
-      .catch(() => {
-        /* le corps procédural reste en place */
-      });
 
     // ------------------------------------------------------------------
     // Pluie et lucioles
@@ -1788,15 +1766,15 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     let pitch = 0;
     let pointerLocked = false;
 
+    // Le cap est ramené dans ]−π, π] à chaque geste. Sans ça il s'accumule
+    // sans fin : au bout de quelques tours, les interpolations angulaires de
+    // la caméra se mettent à tourner dans le mauvais sens — le fameux « ça ne
+    // tourne pas à 360° ».
     const onPointerMove = (event: PointerEvent) => {
-      if (pointerLocked) {
-        yaw -= event.movementX * 0.0022;
-        pitch = Math.max(-1.1, Math.min(1.0, pitch - event.movementY * 0.0018));
-        return;
-      }
-      if (event.buttons === 1 && event.target === renderer.domElement) {
-        yaw -= event.movementX * 0.004;
-        pitch = Math.max(-1.1, Math.min(1.0, pitch - event.movementY * 0.003));
+      const sensitivity = pointerLocked ? 0.0022 : 0.004;
+      if (pointerLocked || (event.buttons === 1 && event.target === renderer.domElement)) {
+        yaw = wrapAngle(yaw - event.movementX * sensitivity);
+        pitch = Math.max(-1.1, Math.min(1.0, pitch - event.movementY * (pointerLocked ? 0.0018 : 0.003)));
       }
     };
     const onPointerDown = () => {
@@ -2029,9 +2007,12 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           // une estimation à partir de deux images.
           const desired = targetHeading;
           rigYaw += wrapAngle(desired - rigYaw) * Math.min(1, dt * 9);
-        } else if (aiming) {
-          // Immobile et en joue : le corps pivote avec le regard.
-          rigYaw += wrapAngle(targetYaw - rigYaw) * Math.min(1, dt * 6);
+        } else {
+          // Immobile, il tourne avec le regard. C'est ce qui permet de faire
+          // un tour complet sur soi-même : sans cela, on peut balayer la
+          // caméra de 360° sans que le corps bouge d'un degré.
+          const rate = aiming ? 6 : 3.4;
+          rigYaw += wrapAngle(targetYaw - rigYaw) * Math.min(1, dt * rate);
         }
         playerRig.group.rotation.y = rigYaw;
         poseAny(playerRig, {
@@ -2053,7 +2034,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           groundUnderPlayer + playerHeight + HUMAN_EYE_Y + Math.abs(Math.sin(bob)) * bobAmplitude,
           playerPosition.z,
         );
-        camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.18);
+        // Le plus court chemin, toujours : une interpolation linéaire entre
+        // +179° et −179° fait un demi-tour dans le mauvais sens.
+        camera.rotation.y += wrapAngle(targetYaw - camera.rotation.y) * Math.min(1, dt * 14);
         camera.rotation.x = pitch;
         camera.rotation.z = Math.sin(bob * 0.5) * 0.004;
       } else {
@@ -2082,7 +2065,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         const floor = terrainHeight(camera.position.x, camera.position.z) + 0.42;
         if (camera.position.y < floor) camera.position.y = floor;
 
-        camera.rotation.y = THREE.MathUtils.lerp(camera.rotation.y, targetYaw, 0.3);
+        camera.rotation.y += wrapAngle(targetYaw - camera.rotation.y) * Math.min(1, dt * 20);
         camera.rotation.x = pitch;
         camera.rotation.z = 0;
       }
@@ -2363,7 +2346,6 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       },
       setWeapon(id) {
         viewModel.setWeapon(id);
-        requestedWeapon = id;
         equipAny(playerRig, id);
       },
       setAiming(value) {
@@ -2445,9 +2427,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         for (const surface of waterSurfaces) surface.dispose();
         for (const [, rig] of animalRigs) disposeAnimalRig(rig);
         animalRigs.clear();
-        avatarDisposed = true;
-        if ((playerRig as AvatarRig).source === "gltf") disposeAvatar(playerRig as AvatarRig);
-        else disposeHumanRig(playerRig);
+        disposeHumanRig(playerRig);
         viewModel.dispose();
         for (const rig of mewaRigs.values()) {
           rig.halo.material.dispose();

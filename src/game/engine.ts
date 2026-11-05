@@ -23,6 +23,7 @@ import {
   tickVitals,
   worldClock,
 } from "./realism";
+import { moveWalker } from "./collision";
 import { initialArsenalState, type ArsenalState } from "./hunting";
 import { type MewaReward, type MewaState, mewasFound, spawnMewas, stepMewas } from "./mewas";
 import { waterDepthAt } from "./water";
@@ -351,8 +352,12 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     const swim = swimState(px, pz, next.elapsed, worldClock(next.elapsed, next.settings).hour);
     const walkingOnWater = getOutfit(next.player.outfit).power === "water";
     const speed = effectiveSpeed(next, mode, walkingOnWater ? 1 : swim.speedFactor);
-    const nx = px + dx * speed * dt + swim.drift[0] * dt;
-    const nz = pz + dz * speed * dt + swim.drift[1] * dt;
+    const wantedX = px + dx * speed * dt + swim.drift[0] * dt;
+    const wantedZ = pz + dz * speed * dt + swim.drift[1] * dt;
+
+    // Les fûts sont solides. On demande le déplacement, la forêt répond ce
+    // qu'elle autorise : poussée le long du tronc, jamais arrêt net.
+    const [nx, nz] = moveWalker(px, pz, wantedX, wantedZ);
 
     next.player.position = [clampWorld(nx), next.player.position[1], clampWorld(nz)];
     next.player.motion = swim.inWater && !walkingOnWater ? "swim" : mode;

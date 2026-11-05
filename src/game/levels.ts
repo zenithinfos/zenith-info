@@ -186,6 +186,16 @@ export const DEFAULT_START = {
   zone: "camp",
 };
 
+/**
+ * Trouée du camp : aucun arbre dans ce rayon autour du point de départ.
+ *
+ * La valeur est ici, et non dans la scène, parce que deux choses la lisent :
+ * le rendu qui plante les arbres et la collision qui les rend solides. Deux
+ * constantes pour un même cercle, c'est un mur invisible garanti le jour où
+ * l'une bouge.
+ */
+export const SPAWN_CLEARING = { x: 0, z: 6, radius: 7 } as const;
+
 export function levelSummary(): { id: string; name: string; difficulty: number }[] {
   return ZONES.map((z) => ({ id: z.id, name: z.name, difficulty: z.difficulty }));
 }

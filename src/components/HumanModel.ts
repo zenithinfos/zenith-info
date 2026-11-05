@@ -26,7 +26,10 @@ import { createWeaponModel, disposeWeaponModel, type WeaponModel } from "./Weapo
 export const HUMAN_HIPS_Y = 0.95;
 export const HUMAN_EYE_Y = 1.66;
 const SHOULDER_Y = 0.2; // dans l'espace de la poitrine
-const SHOULDER_X = 0.172;
+// L'articulation de l'épaule doit tomber **dans** le torse, pas à côté. À
+// 0,172 m du centre, elle était déjà dehors : le bras flottait et la coiffe du
+// deltoïde faisait office de pont — c'est ce qui donnait des épaulettes.
+const SHOULDER_X = 0.146;
 const UPPER_ARM = 0.3;
 const FOREARM = 0.27;
 const THIGH = 0.44;
@@ -172,26 +175,47 @@ function loftGeometry(
   // vingt sections là où une cuisse en a six.
   const subdiv = Math.max(0, options.smooth ?? 0);
 
-  // Rééchantillonnage par interpolation monotone des rayons : les sections
-  // ajoutées ne créent pas de facettes, elles suivent la courbe existante.
+  // Rééchantillonnage par **spline de Catmull-Rom**.
+  //
+  // La version précédente interpolait chaque paire de sections avec un
+  // adoucissement (`t²(3−2t)`), dont la dérivée s'annule aux deux bouts : le
+  // rayon marquait donc un palier à chaque section de contrôle. Sur un torse
+  // de six sections, cela ne se voyait pas ; sur une tête de doute, cela
+  // faisait des bourrelets horizontaux réguliers autour du visage — les
+  // « ondulations » qu'on prenait pour un défaut de modélisation.
+  //
+  // Une spline passe par tous les points sans s'arrêter à aucun : le profil
+  // est lisse, et les sections ne sont plus des marches.
+  const n = rings.length;
+  const at = (index: number): Ring => rings[Math.max(0, Math.min(n - 1, index))];
   const dense: Ring[] = [];
-  for (let i = 0; i < rings.length - 1; i++) {
-    const a = rings[i];
-    const b = rings[i + 1];
-    dense.push(a);
-    for (let k = 1; k <= subdiv; k++) {
-      const t = k / (subdiv + 1);
-      const ease = t * t * (3 - 2 * t);
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const steps = subdiv + 1;
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      // Catmull-Rom uniforme : (2p1) + (−p0+p2)t + (2p0−5p1+4p2−p3)t² + (−p0+3p1−3p2+p3)t³, sur 2.
+      const spline = (a0: number, a1: number, a2: number, a3: number) =>
+        0.5 *
+        (2 * a1 +
+          (-a0 + a2) * t +
+          (2 * a0 - 5 * a1 + 4 * a2 - a3) * t2 +
+          (-a0 + 3 * a1 - 3 * a2 + a3) * t3);
       dense.push({
-        y: a.y + (b.y - a.y) * t,
-        rx: a.rx + (b.rx - a.rx) * ease,
-        rz: a.rz + (b.rz - a.rz) * ease,
-        x: (a.x ?? 0) + ((b.x ?? 0) - (a.x ?? 0)) * t,
-        z: (a.z ?? 0) + ((b.z ?? 0) - (a.z ?? 0)) * ease,
+        y: spline(p0.y, p1.y, p2.y, p3.y),
+        rx: Math.max(0.0005, spline(p0.rx, p1.rx, p2.rx, p3.rx)),
+        rz: Math.max(0.0005, spline(p0.rz, p1.rz, p2.rz, p3.rz)),
+        x: spline(p0.x ?? 0, p1.x ?? 0, p2.x ?? 0, p3.x ?? 0),
+        z: spline(p0.z ?? 0, p1.z ?? 0, p2.z ?? 0, p3.z ?? 0),
       });
     }
   }
-  dense.push(rings[rings.length - 1]);
+  dense.push(rings[n - 1]);
 
   const positions: number[] = [];
   const uvs: number[] = [];
@@ -317,23 +341,27 @@ function sculptedHead(
   material: THREE.Material,
   collect: { geometries: THREE.BufferGeometry[] },
 ): THREE.Mesh {
+  // Proportions : le visage était trop long et le crâne trop petit — un
+  // menton qui descend, une calotte qui s'arrête, et le personnage prend un
+  // air de masque. On remonte la mâchoire, on élargit le bas du visage et on
+  // donne au crâne les trois cinquièmes de la hauteur qu'il mérite.
   const rings: Ring[] = [
-    { y: -0.104, rx: 0.03, rz: 0.033, z: -0.019 },
-    { y: -0.098, rx: 0.037, rz: 0.041, z: -0.018 },
-    { y: -0.088, rx: 0.045, rz: 0.05, z: -0.016 },
-    { y: -0.074, rx: 0.052, rz: 0.058, z: -0.013 },
-    { y: -0.058, rx: 0.056, rz: 0.063, z: -0.008 },
-    { y: -0.04, rx: 0.062, rz: 0.07, z: -0.003 },
-    { y: -0.02, rx: 0.067, rz: 0.076, z: 0.001 },
-    { y: 0.0, rx: 0.0705, rz: 0.081, z: 0.005 },
-    { y: 0.02, rx: 0.0725, rz: 0.084, z: 0.008 },
-    { y: 0.04, rx: 0.0735, rz: 0.0855, z: 0.01 },
-    { y: 0.06, rx: 0.073, rz: 0.0855, z: 0.011 },
-    { y: 0.08, rx: 0.0705, rz: 0.0835, z: 0.012 },
-    { y: 0.098, rx: 0.064, rz: 0.077, z: 0.012 },
-    { y: 0.112, rx: 0.052, rz: 0.064, z: 0.012 },
-    { y: 0.121, rx: 0.034, rz: 0.044, z: 0.012 },
-    { y: 0.126, rx: 0.016, rz: 0.024, z: 0.012 },
+    { y: -0.096, rx: 0.032, rz: 0.034, z: -0.019 },
+    { y: -0.09, rx: 0.039, rz: 0.042, z: -0.018 },
+    { y: -0.08, rx: 0.046, rz: 0.051, z: -0.014 },
+    { y: -0.068, rx: 0.051, rz: 0.057, z: -0.009 },
+    { y: -0.052, rx: 0.056, rz: 0.064, z: -0.004 },
+    { y: -0.034, rx: 0.062, rz: 0.072, z: 0.001 },
+    { y: -0.016, rx: 0.069, rz: 0.08, z: 0.005 },
+    { y: 0.0, rx: 0.0725, rz: 0.084, z: 0.008 },
+    { y: 0.018, rx: 0.0755, rz: 0.088, z: 0.011 },
+    { y: 0.038, rx: 0.077, rz: 0.09, z: 0.013 },
+    { y: 0.058, rx: 0.0775, rz: 0.091, z: 0.014 },
+    { y: 0.078, rx: 0.0755, rz: 0.09, z: 0.015 },
+    { y: 0.096, rx: 0.0705, rz: 0.085, z: 0.015 },
+    { y: 0.111, rx: 0.06, rz: 0.074, z: 0.015 },
+    { y: 0.122, rx: 0.04, rz: 0.053, z: 0.015 },
+    { y: 0.128, rx: 0.019, rz: 0.027, z: 0.015 },
   ];
 
   // Résolution : les traits du visage font trois à dix millimètres. Si les
@@ -394,31 +422,36 @@ function sculptedHead(
     // pointe. Étroit — le premier essai faisait un bec qui descendait jusqu'au
     // menton, parce que la bosse s'étalait sur toute la hauteur du visage.
     if (z < -0.01) {
-      const ridge = gauss(x, 0.0102) * gauss(y + 0.004, 0.028);
-      z -= ridge * 0.0072;
-      const bridge = gauss(x, 0.0115) * gauss(y - 0.012, 0.018);
-      z -= bridge * 0.004;
+      const ridge = gauss(x, 0.0115) * gauss(y + 0.006, 0.03);
+      z -= ridge * 0.0105;
+      const bridge = gauss(x, 0.013) * gauss(y - 0.012, 0.019);
+      z -= bridge * 0.0055;
       // Pointe large et basse, posée sur des ailes écartées.
-      const tip = gauss(Math.hypot(x * 1.05, (y + 0.034) * 1.3), 0.0165);
-      z -= tip * 0.0082;
+      const tip = gauss(Math.hypot(x * 1.02, (y + 0.035) * 1.25), 0.0175);
+      z -= tip * 0.0118;
       // Narines : deux creux larges sous la pointe.
       for (const side of [-1, 1]) {
         z += gauss(Math.hypot((x - side * 0.0145) * 1.25, (y + 0.041) * 1.5), 0.0092) * 0.0038;
       }
     }
 
-    // Bouche : un pli creux entre deux lèvres en relief. Il faut le marquer
-    // franchement — une fente de deux dixièmes de millimètre ne se voit pas.
+    // Bouche : **un seul creux**, très doux, puis les lèvres sont des volumes
+    // rapportés (voir `lipVolume`). Pousser des gaussiennes de cinq
+    // millimètres sur une surface dont les sections sont espacées de deux
+    // produisait une série d'ondulations horizontales autour du menton : à
+    // cette échelle, la bosse tombe entre deux sections et la surface plisse.
     if (z < -0.03) {
-      // Lèvres pleines : le pli central reste net, mais les deux lèvres
-      // avancent franchement. Une bouche plate sous un nez large, et le
-      // visage perd son milieu.
-      z += gauss(y + 0.0605, 0.0032) * gauss(x, 0.0235) * 0.0058;
-      z -= gauss(y + 0.0565, 0.0062) * gauss(x, 0.0245) * 0.0052;
-      z -= gauss(y + 0.0685, 0.0052) * gauss(x, 0.0225) * 0.0062;
+      // Lèvres : deux bombements larges et doux — rayon de neuf millimètres
+      // pour une épaisseur de quatre, jamais un pli de deux millimètres sur
+      // une surface échantillonnée à deux.
+      const mouthWidth = gauss(x, 0.026);
+      z -= gauss(y + 0.0665, 0.0078) * mouthWidth * 0.0055;
+      z -= gauss(y + 0.0525, 0.0078) * mouthWidth * 0.0062;
+      // La fente : une ligne mince, juste pour séparer les deux lèvres.
+      z += gauss(y + 0.0595, 0.0028) * gauss(x, 0.0235) * 0.0032;
       // Sillon sous la lèvre, puis menton qui avance.
-      z += gauss(y + 0.080, 0.0044) * gauss(x, 0.015) * 0.0018;
-      push(0, -0.09, -0.044, 0.018, 0.0055);
+      z += gauss(y + 0.079, 0.0062) * gauss(x, 0.018) * 0.0014;
+      push(0, -0.088, -0.046, 0.02, 0.005);
     }
 
     position.setXYZ(i, x, y, z);
@@ -453,16 +486,41 @@ export function createHumanRig(): HumanRig {
   // Creux (narines, orbites, pli des lèvres) : deux tons plus bas, jamais du
   // noir — un pli noir sous un nez, c'est un trou, pas une ombre.
   const skinShade = new THREE.MeshStandardMaterial({ color: SKIN_SHADE, roughness: 0.72 });
-  const shirt = cloth(0x565e3e, 0.94, surface("shirt"));
-  const shirtDark = cloth(0x3c4330, 0.95);
-  const trousers = cloth(0x4a4f3a, 0.96, surface("trousers"));
-  const trousersDark = cloth(0x373c2d, 0.97);
-  const boots = leather(0x30241b, surface("leather"));
-  const rubber = new THREE.MeshStandardMaterial({ color: 0x14110d, roughness: 0.97 });
-  const webbing = cloth(0x5c5e46, 0.9, surface("webbing"));
-  const pack = cloth(0x46442f, 0.92);
-  const hat = cloth(0x6d6849, 0.95);
+  // Trois valeurs, pas une. Une tenue monochrome — tout en olive du col aux
+  // chaussures — efface les volumes : les jambes disparaissent dans le torse,
+  // les bras dans le fond. Chemise claire, pantalon sombre, sangle claire :
+  // c'est la séparation des valeurs qui fait lire un corps, bien plus que le
+  // nombre de polygones.
+  const shirt = cloth(0x5b5c3c, 0.93, surface("shirt"));
+  const shirtDark = cloth(0x40432c, 0.95);
+  const trousers = cloth(0x373d2c, 0.96, surface("trousers"));
+  const trousersDark = cloth(0x282d20, 0.97);
+  const boots = leather(0x2b2018, surface("leather"));
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x12100c, roughness: 0.97 });
+  const webbing = cloth(0x6d6144, 0.88, surface("webbing"));
+  const pack = cloth(0x4c4a34, 0.92);
+  const hat = cloth(0x615a3f, 0.94);
   const hair = cloth(0x120f0b, 0.98);
+  // Le blanc de l'œil n'est pas blanc : c'est une peau très claire, un peu
+  // ivoire, qui prend une ombre bleutée sous la paupière. Un blanc pur fait
+  // des yeux de poupée, et c'est exactement ce qu'on voyait.
+  const sclera = new THREE.MeshPhysicalMaterial({
+    color: 0x8e8371,
+    roughness: 0.35,
+    metalness: 0,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.12,
+  });
+  swatch(sclera, 0x8e8371);
+  // L'iris est brun sombre, presque noir au centre.
+  const irisMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0x2a1810,
+    roughness: 0.28,
+    metalness: 0,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.08,
+  });
+  swatch(irisMaterial, 0x2a1810);
   const metal = new THREE.MeshStandardMaterial({ color: 0x6a6962, roughness: 0.42, metalness: 0.7 });
   const materials = [
     skin,
@@ -478,6 +536,8 @@ export function createHumanRig(): HumanRig {
     hat,
     hair,
     metal,
+    sclera,
+    irisMaterial,
   ];
 
   const group = new THREE.Group();
@@ -493,11 +553,14 @@ export function createHumanRig(): HumanRig {
   // Un bassin se lit à sa ligne : large aux hanches, plus étroit au pubis.
   const pelvis = loft(
     [
-      { y: -0.13, rx: 0.104, rz: 0.082 },
-      { y: -0.07, rx: 0.128, rz: 0.094 },
-      { y: -0.01, rx: 0.14, rz: 0.1 },
-      { y: 0.05, rx: 0.141, rz: 0.102 },
-      { y: 0.1, rx: 0.133, rz: 0.098 },
+      // Le haut du pantalon rentre sous la chemise : il doit être franchement
+      // plus étroit qu'elle à la taille. Deux surfaces à un millimètre l'une
+      // de l'autre ne se voient pas comme deux vêtements, elles clignotent.
+      { y: -0.13, rx: 0.088, rz: 0.076 },
+      { y: -0.07, rx: 0.108, rz: 0.086 },
+      { y: -0.01, rx: 0.122, rz: 0.094 },
+      { y: 0.05, rx: 0.118, rz: 0.094 },
+      { y: 0.1, rx: 0.106, rz: 0.087 },
     ],
     trousers,
     collect,
@@ -505,20 +568,31 @@ export function createHumanRig(): HumanRig {
   );
   hips.add(pelvis);
 
+  // Un anneau, pas un cylindre : les deux extrémités se resserrent sous le
+  // tissu. Sinon les bouchons du maillage affleurent et l'on voit, à la
+  // ceinture, une couronne de triangles clairs — le genre de détail qui fait
+  // dire « ce n'est pas bien modulé » sans qu'on sache pourquoi.
   const belt = loft(
     [
-      { y: 0.02, rx: 0.146, rz: 0.106 },
-      { y: 0.035, rx: 0.15, rz: 0.109 },
-      { y: 0.055, rx: 0.146, rz: 0.106 },
+      // Douze millimètres au-dessus de la chemise, pas trois centimètres :
+      // une ceinture posée à 3 cm du corps est une bouée, pas une sangle.
+      { y: 0.006, rx: 0.104, rz: 0.078 },
+      { y: 0.012, rx: 0.13, rz: 0.0975 },
+      { y: 0.026, rx: 0.133, rz: 0.1 },
+      { y: 0.038, rx: 0.131, rz: 0.098 },
+      { y: 0.046, rx: 0.104, rz: 0.078 },
     ],
     webbing,
     collect,
-    { radial: 22, power: 2.4 },
+    { radial: 24, power: 2.4, smooth: 1 },
   );
   hips.add(belt);
 
-  const buckle = ellipsoid(0.026, 0.02, 0.012, metal, collect);
-  buckle.position.set(0, 0.038, -0.108);
+  // Boucle : plate, soudée à la sangle. Une ellipsoïde posée dessus faisait
+  // une pastille de métal qui flottait devant le ventre.
+  const buckle = mesh(new THREE.BoxGeometry(0.05, 0.026, 0.012), metal, collect);
+  buckle.position.set(0, 0.026, -0.0955);
+  buckle.rotation.x = 0.04;
   hips.add(buckle);
 
   // Deux poches de ceinture : la silhouette d'un homme équipé, pas d'un
@@ -545,9 +619,15 @@ export function createHumanRig(): HumanRig {
   // profond et un peu carré.
   const torso = loft(
     [
-      { y: -0.2, rx: 0.121, rz: 0.088 },
-      { y: -0.14, rx: 0.126, rz: 0.09 },
-      { y: -0.06, rx: 0.129, rz: 0.093 },
+      // La chemise est rentrée dans le pantalon. Son bas s'affine et passe
+      // **sous** la ceinture : le croisement des deux surfaces tombe à 96 cm,
+      // exactement là où la ceinture le cache. Élargi pour « retomber sur les
+      // hanches », il formait une jupe ; laissé en l'air, il faisait un
+      // panneau de tissu qui pendait sous la boucle.
+      { y: -0.1, rx: 0.106, rz: 0.086 },
+      { y: -0.06, rx: 0.12, rz: 0.09 },
+      { y: -0.02, rx: 0.128, rz: 0.093 },
+      { y: 0.04, rx: 0.131, rz: 0.094 },
       { y: 0.02, rx: 0.132, rz: 0.095, z: -0.002 },
       { y: 0.1, rx: 0.144, rz: 0.102, z: -0.004 },
       { y: 0.18, rx: 0.152, rz: 0.107, z: -0.004 },
@@ -587,14 +667,14 @@ export function createHumanRig(): HumanRig {
   // Gilet de terrain : deux poches plates à rabat, deux sangles, un poste
   // radio avec son antenne — les détails qu'on voit sur un homme de dos.
   for (const side of [-1, 1]) {
-    const pocket = mesh(new THREE.BoxGeometry(0.074, 0.072, 0.016), shirtDark, collect);
-    pocket.position.set(side * 0.068, 0.157, -0.104);
-    pocket.rotation.set(0.04, side * -0.22, 0);
+    const pocket = mesh(new THREE.BoxGeometry(0.052, 0.05, 0.009), shirtDark, collect);
+    pocket.position.set(side * 0.05, 0.145, -0.1035);
+    pocket.rotation.set(0.06, side * -0.42, 0);
     spine.add(pocket);
 
-    const flap = mesh(new THREE.BoxGeometry(0.076, 0.02, 0.019), webbing, collect);
-    flap.position.set(side * 0.068, 0.188, -0.104);
-    flap.rotation.set(0.04, side * -0.22, 0);
+    const flap = mesh(new THREE.BoxGeometry(0.054, 0.011, 0.012), webbing, collect);
+    flap.position.set(side * 0.05, 0.168, -0.1035);
+    flap.rotation.set(0.06, side * -0.42, 0);
     spine.add(flap);
 
     // Sangle d'épaule du sac : elle passe sur le haut de l'épaule, pas sur
@@ -606,13 +686,16 @@ export function createHumanRig(): HumanRig {
     spine.add(strap);
   }
 
-  const radio = ellipsoid(0.032, 0.052, 0.022, pack, collect);
-  radio.position.set(-0.078, 0.32, -0.098);
+  // Radio : plaquée sur la poitrine, à hauteur de poche. Posée plus haut et
+  // plus épaisse, elle flottait devant l'épaule comme une médaille.
+  const radio = ellipsoid(0.026, 0.042, 0.016, pack, collect);
+  radio.position.set(-0.082, 0.238, -0.092);
+  radio.rotation.z = 0.08;
   spine.add(radio);
-  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.0025, 0.22, 6), metal);
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0022, 0.21, 6), metal);
   collect.geometries.push(antenna.geometry);
-  antenna.position.set(-0.108, 0.43, -0.09);
-  antenna.rotation.z = 0.16;
+  antenna.position.set(-0.104, 0.33, -0.086);
+  antenna.rotation.z = 0.14;
   spine.add(antenna);
 
   // Sac à dos : cadre + poche + couchage roulé.
@@ -652,45 +735,57 @@ export function createHumanRig(): HumanRig {
     joint.position.set(sign * SHOULDER_X, SHOULDER_Y, 0);
     chest.add(joint);
 
-    // Aisselle : un volume court qui bouche l'angle entre le bras et le
-    // torse. Sans lui, on voit le fond du décor entre le bras et le flanc.
-    const armpit = ellipsoid(0.05, 0.075, 0.062, shirt, collect);
-    armpit.position.set(sign * 0.012, -0.03, 0);
-    armpit.rotation.z = sign * 0.16;
-    joint.add(armpit);
-
-    // Deltoïde : une masse ronde posée sur l'épaule, pas une bille.
-    const deltoid = ellipsoid(0.041, 0.052, 0.05, shirt, collect);
-    deltoid.position.set(sign * -0.004, -0.032, 0);
-    deltoid.rotation.z = sign * 0.3;
-    joint.add(deltoid);
+    // Épaule : une seule surface, du trapèze au bras.
+    //
+    // Avant, c'était deux ellipsoïdes posées côte à côte — une bille pour
+    // l'aisselle, une autre pour le deltoïde. À l'écran, cela faisait des
+    // épaulettes de footballeur américain, et c'est ce qui donnait au
+    // personnage son air de mannequin articulé. Une épaule se lit à sa
+    // courbe : elle monte du cou, s'arrondit, puis descend dans le bras sans
+    // jamais s'interrompre.
+    const shoulderCap = loft(
+      [
+        { y: 0.074, rx: 0.011, rz: 0.022, x: sign * -0.02 },
+        { y: 0.058, rx: 0.028, rz: 0.037, x: sign * -0.018 },
+        { y: 0.034, rx: 0.043, rz: 0.05, x: sign * -0.009 },
+        { y: 0.0, rx: 0.053, rz: 0.057, x: 0 },
+        { y: -0.045, rx: 0.052, rz: 0.055 },
+        { y: -0.095, rx: 0.047, rz: 0.05 },
+        { y: -0.14, rx: 0.044, rz: 0.046 },
+      ],
+      shirt,
+      collect,
+      { radial: 22, power: 2.15, smooth: 2 },
+    );
+    joint.add(shoulderCap);
 
     // Bras : biceps, creux du coude, avant-bras qui regrossit puis s'affine.
     const upper = loft(
       [
-        { y: 0.0, rx: 0.045, rz: 0.048 },
-        { y: -0.05, rx: 0.05, rz: 0.054 },
-        { y: -0.1, rx: 0.052, rz: 0.056 },
-        { y: -0.17, rx: 0.047, rz: 0.05 },
-        { y: -0.24, rx: 0.042, rz: 0.044 },
-        { y: -0.3, rx: 0.039, rz: 0.041 },
+        { y: -0.06, rx: 0.046, rz: 0.049 },
+        { y: -0.1, rx: 0.049, rz: 0.052 },
+        { y: -0.15, rx: 0.048, rz: 0.051 },
+        { y: -0.21, rx: 0.044, rz: 0.047 },
+        { y: -0.26, rx: 0.041, rz: 0.043 },
+        { y: -0.3, rx: 0.038, rz: 0.04 },
       ],
       shirt,
       collect,
-      { radial: 18, power: 2.2 },
+      { radial: 20, power: 2.2, smooth: 1 },
     );
     joint.add(upper);
 
     // Manchette roulée au-dessus du coude.
     const cuff = loft(
       [
-        { y: -0.24, rx: 0.046, rz: 0.048 },
-        { y: -0.265, rx: 0.048, rz: 0.05 },
-        { y: -0.3, rx: 0.044, rz: 0.046 },
+        { y: -0.235, rx: 0.045, rz: 0.047 },
+        { y: -0.252, rx: 0.05, rz: 0.053 },
+        { y: -0.272, rx: 0.049, rz: 0.052 },
+        { y: -0.3, rx: 0.042, rz: 0.044 },
       ],
       shirtDark,
       collect,
-      { radial: 18 },
+      { radial: 20, smooth: 1 },
     );
     joint.add(cuff);
 
@@ -755,16 +850,20 @@ export function createHumanRig(): HumanRig {
   neckJoint.position.y = 0.26;
   chest.add(neckJoint);
 
+  // Le cou se resserre en montant et s'incline vers l'arrière. Élargi en
+  // haut — pour « rejoindre la mâchoire » — il traversait le menton et l'on
+  // voyait, sur la face, une série de bourrelets horizontaux qui n'existaient
+  // nulle part dans le maillage du visage.
   const neck = loft(
     [
-      { y: -0.02, rx: 0.056, rz: 0.058 },
-      { y: 0.03, rx: 0.05, rz: 0.052 },
-      { y: 0.08, rx: 0.049, rz: 0.05 },
-      { y: 0.1, rx: 0.053, rz: 0.055 },
+      { y: -0.02, rx: 0.057, rz: 0.06, z: 0.006 },
+      { y: 0.03, rx: 0.051, rz: 0.053, z: 0.012 },
+      { y: 0.07, rx: 0.045, rz: 0.047, z: 0.017 },
+      { y: 0.1, rx: 0.042, rz: 0.044, z: 0.02 },
     ],
     skin,
     collect,
-    { radial: 16 },
+    { radial: 20, smooth: 1 },
   );
   neckJoint.add(neck);
 
@@ -778,36 +877,85 @@ export function createHumanRig(): HumanRig {
   const headForm = sculptedHead(skin, collect);
   head.add(headForm);
 
+
+
   // Ce qui reste rapporté, comme sur un vrai visage : le globe des yeux, les
   // paupières, les sourcils, les oreilles.
   for (const side of [-1, 1]) {
     const socketY = 0.014;
     const socketZ = -0.069;
 
-    const eyeball = ellipsoid(0.0122, 0.011, 0.0105, hair, collect);
-    eyeball.position.set(side * 0.0295, socketY, socketZ);
+    // Globe : un blanc ivoire, puis l'iris brun et la pupille. Avant, le
+    // globe était peint en noir de cheveu et l'iris en couleur de peau : à
+    // l'écran, cela faisait deux fentes sombres sous les sourcils — un loup,
+    // pas un regard.
+    // Un œil humain n'est pas une bille : le globe est enfoncé dans l'orbite,
+    // et les paupières en couvrent le tiers supérieur et le sixième inférieur.
+    // Un globe trop gros et trop sorti donne ce regard fixe de grenouille —
+    // c'est ce qu'on obtenait en cherchant à « voir les yeux ».
+    const eyeball = ellipsoid(0.0092, 0.0086, 0.0084, sclera, collect);
+    eyeball.position.set(side * 0.0298, socketY, socketZ + 0.0052);
     head.add(eyeball);
 
-    const iris = ellipsoid(0.0044, 0.0048, 0.0035, skin, collect);
-    iris.position.set(side * 0.0305, socketY - 0.0005, socketZ - 0.0092);
+    // L'iris occupe presque toute la fente palpébrale : c'est ce qui
+    // distingue un regard d'une bille. On le pose juste à la surface du globe.
+    const iris = ellipsoid(0.006, 0.0062, 0.003, irisMaterial, collect);
+    iris.position.set(side * 0.0299, socketY - 0.0001, socketZ - 0.0019);
     head.add(iris);
+
+    const pupil = ellipsoid(0.0026, 0.0027, 0.0016, hair, collect);
+    pupil.position.set(side * 0.0299, socketY - 0.0002, socketZ - 0.0034);
+    head.add(pupil);
+
+    // Un point de lumière sur le globe. Sans lui, l'œil est mat et le visage
+    // paraît absent, même bien modélisé.
+    const glint = ellipsoid(0.0009, 0.0009, 0.0007, sclera, collect);
+    glint.position.set(side * 0.0314, socketY + 0.0024, socketZ - 0.0036);
+    head.add(glint);
 
     // Paupières : deux voiles de peau qui coupent le globe. C'est ce qui fait
     // qu'un œil regarde au lieu de briller.
-    const upperLid = ellipsoid(0.0145, 0.0075, 0.0118, skin, collect);
-    upperLid.position.set(side * 0.0295, socketY + 0.0072, socketZ + 0.0018);
-    upperLid.rotation.z = side * -0.14;
+    // Les paupières sont des **coques** sphériques centrées sur le globe :
+    // une calotte haute et une calotte basse, chacune un peu plus grande que
+    // l'œil. Leur bord découpe la fente en amande. Posées comme des boules
+    // devant l'œil, elles fermaient le regard ; retournées, elles le
+    // recouvraient entièrement. C'est la seule forme qui donne une paupière
+    // sans modèle de paupière.
+    const lidShell = (big: number, thetaStart: number, thetaLength: number) => {
+      const geometry = new THREE.SphereGeometry(big, 30, 24, 0, Math.PI * 2, thetaStart, thetaLength);
+      collect.geometries.push(geometry);
+      return new THREE.Mesh(geometry, skin);
+    };
+
+    // Le bord haut tombe juste au-dessus du centre du globe, le bord bas un
+    // peu plus bas : la fente fait quatre millimètres de haut pour un œil de
+    // dix-sept — l'ouverture d'un regard au repos.
+    const upperLid = lidShell(0.0112, 0, Math.PI * 0.44);
+    upperLid.position.set(side * 0.0298, socketY, socketZ + 0.0052);
+    upperLid.rotation.z = side * -0.06;
     head.add(upperLid);
 
-    const lowerLid = ellipsoid(0.0135, 0.0048, 0.0112, skin, collect);
-    lowerLid.position.set(side * 0.0295, socketY - 0.0078, socketZ + 0.002);
+    const lowerLid = lidShell(0.0109, Math.PI * 0.62, Math.PI * 0.38);
+    lowerLid.position.set(side * 0.0298, socketY - 0.0006, socketZ + 0.0052);
     head.add(lowerLid);
 
+    // Pli de la paupière : une ligne sombre, pas un volume.
+    const lidCrease = ellipsoid(0.0112, 0.0014, 0.0034, skinShade, collect);
+    lidCrease.position.set(side * 0.0298, socketY + 0.0072, socketZ + 0.0014);
+    lidCrease.rotation.z = side * -0.16;
+    head.add(lidCrease);
+
     // Sourcil : un arc de poils, fin, posé sur l'arcade.
-    const eyebrow = ellipsoid(0.0185, 0.003, 0.0048, hair, collect);
-    eyebrow.position.set(side * 0.0295, 0.0448, -0.0685);
-    eyebrow.rotation.z = side * -0.17;
-    head.add(eyebrow);
+    // Sourcil : deux segments plutôt qu'une barre — l'arcade a une queue
+    // fine et une tête plus fournie. Un seul fuseau fait un trait de crayon.
+    const browHead = ellipsoid(0.0125, 0.0032, 0.0046, hair, collect);
+    browHead.position.set(side * 0.0228, 0.0448, -0.0682);
+    browHead.rotation.z = side * -0.12;
+    head.add(browHead);
+    const browTail = ellipsoid(0.0098, 0.0022, 0.0038, hair, collect);
+    browTail.position.set(side * 0.0418, 0.0472, -0.0652);
+    browTail.rotation.z = side * -0.3;
+    head.add(browTail);
 
     // Oreille : pavillon ovale, creusé, collé à la tempe.
     const ear = ellipsoid(0.0075, 0.0225, 0.0145, skin, collect);
@@ -847,17 +995,32 @@ export function createHumanRig(): HumanRig {
   // qui distingue une casquette de brousse d'une soucoupe.
   const brim = loft(
     [
-      { y: 0.086, rx: 0.093, rz: 0.104, z: -0.008 },
-      { y: 0.08, rx: 0.108, rz: 0.121, z: -0.013 },
-      { y: 0.074, rx: 0.115, rz: 0.13, z: -0.016 },
-      { y: 0.07, rx: 0.11, rz: 0.124, z: -0.017 },
+      { y: 0.088, rx: 0.083, rz: 0.093, z: 0.004 },
+      { y: 0.082, rx: 0.096, rz: 0.108, z: -0.006 },
+      { y: 0.075, rx: 0.101, rz: 0.114, z: -0.011 },
+      { y: 0.07, rx: 0.089, rz: 0.1, z: -0.006 },
     ],
     hat,
     collect,
-    { radial: 28, power: 2, tile: 0.22 },
+    { radial: 30, power: 2, tile: 0.22, smooth: 1 },
   );
-  brim.rotation.x = 0.05;
+  brim.rotation.x = 0.045;
   head.add(brim);
+
+  // Galon : un ruban sombre au pied de la calotte. Sans lui, le chapeau est
+  // une soucoupe ; avec, c'est un couvre-chef — et il tient la lumière au
+  // niveau du regard, là où un visage a besoin d'une ligne pour se lire.
+  const hatBand = loft(
+    [
+      { y: 0.092, rx: 0.0785, rz: 0.0875, z: 0.012 },
+      { y: 0.099, rx: 0.0846, rz: 0.0936, z: 0.012 },
+      { y: 0.11, rx: 0.0785, rz: 0.0875, z: 0.012 },
+    ],
+    webbing,
+    collect,
+    { radial: 26, tile: 0.2 },
+  );
+  head.add(hatBand);
 
   // --- Jambes -----------------------------------------------------------
   const thigh = { left: new THREE.Group(), right: new THREE.Group() };
@@ -869,22 +1032,25 @@ export function createHumanRig(): HumanRig {
     ["right", 1],
   ] as const) {
     const hip = thigh[key];
-    hip.position.set(sign * 0.095, -0.03, 0);
+    hip.position.set(sign * 0.09, -0.03, 0);
     hips.add(hip);
 
+    // La cuisse part sous le bassin sans l'élargir : c'est l'erreur classique
+    // — un haut de cuisse plus large que la hanche, et le pantalon devient une
+    // couche. Elle s'affine vers le genou, qui reste la partie la plus étroite.
     const upperLeg = loft(
       [
-        { y: 0.07, rx: 0.092, rz: 0.1 },
-        { y: 0, rx: 0.1, rz: 0.108 },
-        { y: -0.1, rx: 0.095, rz: 0.101 },
-        { y: -0.2, rx: 0.086, rz: 0.092 },
-        { y: -0.32, rx: 0.073, rz: 0.078 },
-        { y: -0.4, rx: 0.064, rz: 0.068 },
-        { y: -0.44, rx: 0.057, rz: 0.06 },
+        { y: 0.07, rx: 0.084, rz: 0.094 },
+        { y: 0, rx: 0.092, rz: 0.101 },
+        { y: -0.1, rx: 0.088, rz: 0.096 },
+        { y: -0.2, rx: 0.08, rz: 0.088 },
+        { y: -0.32, rx: 0.068, rz: 0.074 },
+        { y: -0.4, rx: 0.059, rz: 0.064 },
+        { y: -0.44, rx: 0.053, rz: 0.057 },
       ],
       trousers,
       collect,
-      { radial: 20, power: 2.2 },
+      { radial: 22, power: 2.2, smooth: 1 },
     );
     hip.add(upperLeg);
 
@@ -900,16 +1066,17 @@ export function createHumanRig(): HumanRig {
 
     const lowerLeg = loft(
       [
-        { y: 0.03, rx: 0.062, rz: 0.066 },
-        { y: -0.06, rx: 0.067, rz: 0.077 },
-        { y: -0.14, rx: 0.061, rz: 0.07 },
-        { y: -0.24, rx: 0.049, rz: 0.054 },
-        { y: -0.34, rx: 0.039, rz: 0.042 },
+        { y: 0.035, rx: 0.054, rz: 0.058 },
+        { y: -0.03, rx: 0.058, rz: 0.066 },
+        { y: -0.09, rx: 0.059, rz: 0.072 },
+        { y: -0.17, rx: 0.054, rz: 0.064 },
+        { y: -0.26, rx: 0.045, rz: 0.051 },
+        { y: -0.34, rx: 0.038, rz: 0.042 },
         { y: -0.405, rx: 0.034, rz: 0.038 },
       ],
       trousers,
       collect,
-      { radial: 18, power: 2.2 },
+      { radial: 20, power: 2.2, smooth: 1 },
     );
     kneeJoint.add(lowerLeg);
 
@@ -920,13 +1087,15 @@ export function createHumanRig(): HumanRig {
     // Guêtre serrée sur la chaussure.
     const gaiter = loft(
       [
-        { y: 0.11, rx: 0.05, rz: 0.054 },
-        { y: 0.07, rx: 0.048, rz: 0.052 },
-        { y: 0.02, rx: 0.051, rz: 0.056 },
+        { y: 0.115, rx: 0.035, rz: 0.038 },
+        { y: 0.1, rx: 0.049, rz: 0.053 },
+        { y: 0.07, rx: 0.05, rz: 0.054 },
+        { y: 0.035, rx: 0.053, rz: 0.058 },
+        { y: 0.012, rx: 0.043, rz: 0.047 },
       ],
       trousersDark,
       collect,
-      { radial: 16 },
+      { radial: 18, smooth: 1 },
     );
     ankleJoint.add(gaiter);
 

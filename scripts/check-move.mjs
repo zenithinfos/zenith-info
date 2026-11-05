@@ -30,7 +30,7 @@ const dir = await mkdtemp(path.join(tmpdir(), "minkebe-move-"));
 const bundle = path.join(dir, "move.mjs");
 await build({
   stdin: {
-    contents: `export * from "./src/game/engine.ts";`,
+    contents: `export * from "./src/game/engine.ts"; export * from "./src/game/collision.ts";`,
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -41,7 +41,11 @@ await build({
   outfile: bundle,
   logLevel: "error",
 });
-const { newGame, step } = await import(`${bundle}?t=${Date.now()}`);
+const { newGame, step, configureCollision } = await import(`${bundle}?t=${Date.now()}`);
+// Le sujet de ce contrôle est la direction du pas, pas les obstacles : on
+// vide la forêt. Les troncs ont leur propre contrôle (`check-collision.mjs`),
+// avec la densité réelle.
+configureCollision({ treeDensity: 0, understoryDensity: 0, logDensity: 0 });
 await rm(dir, { recursive: true, force: true });
 
 let failures = 0;
@@ -121,6 +125,39 @@ console.log("\nLe cap suit la boussole");
   const west = walk({ left: true, cameraYaw: north });
   const westDeg = ((-west.heading * 180) / Math.PI + 360) % 360;
   check("marcher vers l'ouest donne 270°", Math.abs(westDeg - 270) < 2, `${Math.round(westDeg)}°`);
+}
+
+console.log("\nLe tour complet");
+{
+  // Le joueur tourne sur lui-même : son cap doit suivre, sans à-coup ni
+  // demi-tour dans le mauvais sens au passage de ±180°. C'était le défaut
+  // « ça ne tourne pas à 360° » : les interpolations angulaires allaient
+  // d'un bord à l'autre par le chemin long.
+  const base = { ...newGame(), player: { ...newGame().player, position: [40, 0, 40] } };
+  let state = base;
+  const steps = 48;
+  const headings = [];
+  const directions = [];
+  for (let i = 0; i < steps * 2; i += 1) {
+    const yaw = (i / steps) * Math.PI * 2;
+    const before = state.player.position;
+    state = step(state, { forward: true, cameraYaw: yaw }, 0.05).state;
+    const after = state.player.position;
+    headings.push(state.player.heading);
+    directions.push([after[0] - before[0], after[2] - before[2]]);
+  }
+  // Écart entre deux images : jamais un demi-tour.
+  let biggest = 0;
+  for (let i = 1; i < headings.length; i += 1) {
+    biggest = Math.max(biggest, Math.abs(Math.atan2(Math.sin(headings[i] - headings[i - 1]), Math.cos(headings[i] - headings[i - 1]))));
+  }
+  check("le cap tourne sans à-coup", biggest < 0.35, `écart maxi ${round(biggest)} rad`);
+  const full = headings.filter((h) => Number.isFinite(h));
+  check("aucun cap invalide", full.length === headings.length);
+  // Après un tour, on repart vers le nord.
+  const [dx, dz] = directions[steps * 2 - 1];
+  const len = Math.hypot(dx, dz) || 1;
+  check("au bout d'un tour, le pas repart vers le nord", Math.abs(dz / len + 1) < 0.08 || Math.abs(-dz / len - 1) < 0.08, `pas (${round(dx / len)}, ${round(dz / len)})`);
 }
 
 console.log("\nSans caméra déclarée");

@@ -230,6 +230,10 @@ const panels = [
   { label: "dos", pose: { motion: "run", speed: 4.4, frames: 22 }, camera: [0.6, 1.4, 3.9], target: [0, 1.0, 0] },
   { label: "profil, en joue", pose: { aiming: true, aimPitch: -0.03, frames: 40 }, camera: [-2.9, 1.35, -2.2], target: [0, 1.2, -0.25] },
   { label: "profil", pose: { aiming: false }, camera: [-3.9, 1.25, 0.3], target: [0, 0.95, 0] },
+  // Buste : les épaules et la taille se jugent de près. C'est là que se
+  // voient les volumes mal accordés — une épaule qui déborde, une ceinture
+  // qui flotte.
+  { label: "buste", pose: { aiming: false }, camera: [1.5, 1.62, -2.3], target: [0, 1.24, 0] },
   // Portrait : à trois mètres, une tête fait quarante pixels. Sans ce plan,
   // on juge le visage sans le voir.
   { label: "visage", pose: { aiming: false }, camera: [0.16, 1.72, -0.92], target: [0, 1.61, 0] },
@@ -253,6 +257,19 @@ for (let y = 0; y < H; y++) {
 }
 
 const camera = new THREE.PerspectiveCamera(30, PANEL_W / PANEL_H, 0.05, 60);
+/**
+ * Tampon de profondeur.
+ *
+ * Sans lui, deux surfaces qui se pénètrent — la ceinture et la chemise, par
+ * exemple — se peignent dans un ordre arbitraire et l'on voit des dents de
+ * scie qui n'existent pas dans le jeu, où la carte graphique garde le pixel
+ * le plus proche. Un aperçu qui invente des défauts fait perdre du temps à
+ * corriger des défauts qui n'existent pas.
+ *
+ * On interpole `1 - z` (proportionnel à l'inverse de la distance à la caméra,
+ * donc linéaire à l'écran) : plus grand veut dire plus près.
+ */
+const zbuffer = new Float32Array(W * H).fill(-Infinity);
 const light = new THREE.Vector3(0.45, 0.85, -0.55).normalize();
 
 function renderPanel(offsetX, poseState, cameraPosition, target) {
@@ -320,6 +337,7 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
           (1 - (p.y * 0.5 + 0.5)) * PANEL_H * SS,
         ]),
         depth: (screen[0].z + screen[1].z + screen[2].z) / 3,
+        near: screen.map((point) => 1 - point.z),
         colour,
         normals: normals.map((n) => n.clone()),
       });
@@ -330,6 +348,7 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
 
   for (const triangle of triangles) {
     const [[x0, y0], [x1, y1], [x2, y2]] = triangle.points;
+    const q = triangle.near;
     const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
     const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1, x2)));
     const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
@@ -344,7 +363,11 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
         const w1 = ((x2 - px) * (y0 - py) - (x0 - px) * (y2 - py)) / area;
         const w2 = 1 - w0 - w1;
         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-        const i = (y * W + x) * 3;
+        const depth = q[0] * w0 + q[1] * w1 + q[2] * w2;
+        const pixel = y * W + x;
+        if (depth <= zbuffer[pixel] + 1e-6) continue;
+        zbuffer[pixel] = depth;
+        const i = pixel * 3;
         // Normale interpolée, puis Lambert adouci + un filet de lumière
         // ambiante colorée : c'est ce qui donne du volume à un bras.
         const nx = triangle.normals[0].x * w0 + triangle.normals[1].x * w1 + triangle.normals[2].x * w2;
