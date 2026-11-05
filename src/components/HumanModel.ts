@@ -18,6 +18,7 @@
  */
 
 import * as THREE from "three";
+import { SKIN_BASE, SKIN_MAP_TINT, SKIN_SHADE, SKIN_SHEEN } from "@/game/appearance";
 import { type WeaponId } from "@/game/hunting";
 import { HUMAN_HOLD } from "@/game/holds";
 import { createWeaponModel, disposeWeaponModel, type WeaponModel } from "./WeaponModels";
@@ -372,8 +373,9 @@ function sculptedHead(
     };
 
     for (const side of [-1, 1]) {
-      // Pommette : l'appui large sous l'angle externe de l'œil.
-      push(side * 0.045, -0.012, -0.052, 0.026, 0.0062);
+      // Pommette : l'appui large sous l'angle externe de l'œil. Haute et
+      // marquée — c'est elle qui structure un visage d'Afrique centrale.
+      push(side * 0.045, -0.010, -0.052, 0.027, 0.0074);
       // Fossette sous la pommette : le creux qui dessine le visage.
       push(side * 0.052, -0.044, -0.046, 0.017, -0.0034);
       // Tempe : le creux latéral, au-dessus de la pommette.
@@ -381,8 +383,9 @@ function sculptedHead(
       // Orbite : le globe s'enfonce, l'arcade ressort juste au-dessus.
       push(side * 0.03, 0.015, -0.068, 0.019, -0.0058);
       push(side * 0.03, 0.036, -0.064, 0.015, 0.0032);
-      // Aile du nez.
-      push(side * 0.013, -0.036, -0.07, 0.011, 0.0034);
+      // Aile du nez, large et plate : un nez étroit sous cette peau, ce
+      // serait le nez d'un autre visage.
+      push(side * 0.0175, -0.037, -0.068, 0.0125, 0.0046);
       // Coin de la bouche : la ligne s'enfonce un peu.
       push(side * 0.019, -0.06, -0.058, 0.009, -0.002);
     }
@@ -391,27 +394,31 @@ function sculptedHead(
     // pointe. Étroit — le premier essai faisait un bec qui descendait jusqu'au
     // menton, parce que la bosse s'étalait sur toute la hauteur du visage.
     if (z < -0.01) {
-      const ridge = gauss(x, 0.0072) * gauss(y + 0.006, 0.026);
-      z -= ridge * 0.0085;
-      const bridge = gauss(x, 0.0085) * gauss(y - 0.012, 0.018);
-      z -= bridge * 0.005;
-      const tip = gauss(Math.hypot(x * 1.35, (y + 0.032) * 1.25), 0.0125);
-      z -= tip * 0.0085;
-      // Narines : deux creux sous la pointe.
+      const ridge = gauss(x, 0.0102) * gauss(y + 0.004, 0.028);
+      z -= ridge * 0.0072;
+      const bridge = gauss(x, 0.0115) * gauss(y - 0.012, 0.018);
+      z -= bridge * 0.004;
+      // Pointe large et basse, posée sur des ailes écartées.
+      const tip = gauss(Math.hypot(x * 1.05, (y + 0.034) * 1.3), 0.0165);
+      z -= tip * 0.0082;
+      // Narines : deux creux larges sous la pointe.
       for (const side of [-1, 1]) {
-        z += gauss(Math.hypot((x - side * 0.0105) * 1.5, (y + 0.039) * 1.6), 0.0072) * 0.0034;
+        z += gauss(Math.hypot((x - side * 0.0145) * 1.25, (y + 0.041) * 1.5), 0.0092) * 0.0038;
       }
     }
 
     // Bouche : un pli creux entre deux lèvres en relief. Il faut le marquer
     // franchement — une fente de deux dixièmes de millimètre ne se voit pas.
     if (z < -0.03) {
-      z += gauss(y + 0.0605, 0.003) * gauss(x, 0.021) * 0.0045;
-      z -= gauss(y + 0.056, 0.0058) * gauss(x, 0.0215) * 0.0024;
-      z -= gauss(y + 0.068, 0.0045) * gauss(x, 0.018) * 0.0028;
+      // Lèvres pleines : le pli central reste net, mais les deux lèvres
+      // avancent franchement. Une bouche plate sous un nez large, et le
+      // visage perd son milieu.
+      z += gauss(y + 0.0605, 0.0032) * gauss(x, 0.0235) * 0.0058;
+      z -= gauss(y + 0.0565, 0.0062) * gauss(x, 0.0245) * 0.0052;
+      z -= gauss(y + 0.0685, 0.0052) * gauss(x, 0.0225) * 0.0062;
       // Sillon sous la lèvre, puis menton qui avance.
-      z += gauss(y + 0.079, 0.0042) * gauss(x, 0.014) * 0.0018;
-      push(0, -0.09, -0.044, 0.017, 0.005);
+      z += gauss(y + 0.080, 0.0044) * gauss(x, 0.015) * 0.0018;
+      push(0, -0.09, -0.044, 0.018, 0.0055);
     }
 
     position.setXYZ(i, x, y, z);
@@ -426,19 +433,26 @@ function sculptedHead(
 export function createHumanRig(): HumanRig {
   const collect = { geometries: [] as THREE.BufferGeometry[] };
   const skinMaps = surface("skin");
+  // Peau d'un homme du bassin du Congo : brun profond, pas « peau bronzée ».
+  // Une valeur claire ne se contente pas de pâlir : elle vire au saumon sous
+  // la lumière chaude de la canopée, et le personnage cesse d'être lui-même.
+  // Le `sheen` garde le reflet doux des peaux foncées, sans lequel le visage
+  // devient un masque plat.
   const skin = new THREE.MeshPhysicalMaterial({
-    color: skinMaps.map ? 0xffffff : 0x8a5a42,
-    roughness: 0.62,
+    color: skinMaps.map ? SKIN_MAP_TINT : SKIN_BASE,
+    roughness: 0.58,
     metalness: 0,
-    sheen: 0.3,
-    sheenColor: new THREE.Color(0xffcaa8),
-    clearcoat: 0.08,
+    sheen: 0.42,
+    sheenColor: new THREE.Color(SKIN_SHEEN),
+    clearcoat: 0.07,
     ...skinMaps,
   });
   skin.normalScale = new THREE.Vector2(0.55, 0.55);
-  swatch(skin, 0x8a5a42);
+  swatch(skin, SKIN_BASE);
 
-  const skinShade = new THREE.MeshStandardMaterial({ color: 0x4a2f21, roughness: 0.7 });
+  // Creux (narines, orbites, pli des lèvres) : deux tons plus bas, jamais du
+  // noir — un pli noir sous un nez, c'est un trou, pas une ombre.
+  const skinShade = new THREE.MeshStandardMaterial({ color: SKIN_SHADE, roughness: 0.72 });
   const shirt = cloth(0x565e3e, 0.94, surface("shirt"));
   const shirtDark = cloth(0x3c4330, 0.95);
   const trousers = cloth(0x4a4f3a, 0.96, surface("trousers"));

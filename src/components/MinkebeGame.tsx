@@ -101,9 +101,9 @@ function bearingTo(from: [number, number, number], to: [number, number]): number
 }
 
 export default function MinkebeGame() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [phase, setPhase] = useState<Phase>("accueil");
-  const [characterId, setCharacterId] = useState("michelle");
+  const [characterId, setCharacterId] = useState("mbadinga");
   const [hud, setHud] = useState<GameState | null>(null);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -116,7 +116,21 @@ export default function MinkebeGame() {
   const [joinCode, setJoinCode] = useState("");
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
-  const [showHints, setShowHints] = useState(false);
+  const [showControls, setShowControls] = useState(false);
+  // Miroir synchrone de `showControls` : le gestionnaire clavier est monté une
+  // seule fois et ne voit pas l'état React. Sans ce ref, Échap mettrait le jeu
+  // en pause au lieu de refermer l'aide.
+  const controlsOpenRef = useRef(false);
+  useEffect(() => {
+    controlsOpenRef.current = showControls;
+  }, [showControls]);
+  const openControls = (open: boolean) => {
+    controlsOpenRef.current = open;
+    // La souris est capturée pendant le jeu : sans ceci, impossible d'aller
+    // cliquer sur la croix du panneau qu'on vient d'ouvrir.
+    if (open) document.exitPointerLock?.();
+    setShowControls(open);
+  };
   const [showDressing, setShowDressing] = useState(false);
   const [board, setBoard] = useState<BoardRow[]>([]);
   const [boardRank, setBoardRank] = useState(0);
@@ -177,19 +191,15 @@ export default function MinkebeGame() {
       window.clearInterval(timer);
       setLoadingProgress(100);
       setPhase("jeu");
-      setShowHints(true);
       if (voiceOn && voiceAvailable()) {
         const intro = linesFor("intro")[0];
         if (intro) speakLine(intro);
       }
     }, 1500);
 
-    const hideHints = window.setTimeout(() => setShowHints(false), 16000);
-
     return () => {
       window.clearInterval(timer);
       window.clearTimeout(finish);
-      window.clearTimeout(hideHints);
     };
   }, [phase, voiceOn]);
 
@@ -480,7 +490,7 @@ export default function MinkebeGame() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           deviceId: getDeviceId(),
-          name: getCharacter(state.player.characterId as "michelle").name,
+          name: getCharacter(state.player.characterId).name,
           score: state.death.score,
           cause: state.death.cause,
           mewas: mewasFound(state.mewas),
@@ -610,6 +620,10 @@ export default function MinkebeGame() {
       const dt = Math.min(0.06, (now - last) / 1000);
       last = now;
 
+      // Le cap de la caméra commande le déplacement : « avant » veut dire
+      // « là où je regarde ». On le relit à chaque image, sinon la caméra et
+      // les touches se désynchronisent dès le premier mouvement de souris.
+      inputRef.current.cameraYaw = sceneRef.current?.getYaw() ?? stateRef.current.player.heading;
       const result = step(stateRef.current, inputRef.current, dt);
       stateRef.current = result.state;
       // Le saut est une impulsion : on la consomme, sinon rester appuyé sur
@@ -811,6 +825,8 @@ export default function MinkebeGame() {
         event.preventDefault();
       }
       if (event.code === "KeyM") setShowMap((value) => !value);
+      // H : le bloc de commandes. Une seule touche, un seul endroit.
+      if (event.code === "KeyH") openControls(!controlsOpenRef.current);
       if (event.code.startsWith("Digit")) {
         const index = Number(event.code.slice(5)) - 1;
         const weapon = WEAPONS[index];
@@ -841,7 +857,13 @@ export default function MinkebeGame() {
         event.preventDefault();
       }
       if (event.code === "Escape") {
-        setPhase((current) => (current === "jeu" ? "pause" : current === "pause" ? "jeu" : current));
+        // Échap ferme d'abord l'aide, ensuite seulement il met en pause : une
+        // touche qui fait deux choses d'un coup surprend toujours.
+        if (controlsOpenRef.current) {
+          openControls(false);
+        } else {
+          setPhase((current) => (current === "jeu" ? "pause" : current === "pause" ? "jeu" : current));
+        }
       }
       if (event.code === "KeyP" && document.pointerLockElement === null) {
         sceneRef.current?.requestLook();
@@ -1069,7 +1091,7 @@ export default function MinkebeGame() {
   // ------------------------------------------------------------------
   const clock = hud ? worldClock(hud.elapsed, hud.settings) : worldClock(0);
   const zone = hud ? getZone(hud.zoneId) : undefined;
-  const character = getCharacter(characterId as "michelle");
+  const character = getCharacter(characterId);
   const arsenal = hud?.hunt.arsenal ?? huntRef.current.arsenal;
   const heldWeapon = getWeapon(arsenal.current);
   const heldAmmo = weaponStateOf(arsenal, heldWeapon.id);
@@ -1281,30 +1303,6 @@ export default function MinkebeGame() {
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans">E</kbd>
                   </button>
                 )}
-                {showHints && (
-                  // Six gestes, pas dix-huit. Le reste — boire, manger,
-                  // griller, le vestiaire — s'apprend par les boutons
-                  // contextuels, qui n'apparaissent que quand ils servent.
-                  <div className="pointer-events-none flex flex-wrap items-center justify-center gap-1.5 rounded-full bg-canopy-950/60 px-3 py-1 text-[0.6rem] text-mist/70 backdrop-blur-sm">
-                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">ZQSD</kbd>
-                    <span>{t("game.hints.walk")}</span>
-                    <span className="text-mist/25">·</span>
-                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">Espace</kbd>
-                    <span>{t("game.hints.jump")}</span>
-                    <span className="text-mist/25">·</span>
-                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">Ctrl</kbd>
-                    <span>{t("game.hints.block")}</span>
-                    <span className="text-mist/25">·</span>
-                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">clic</kbd>
-                    <span>{t("game.hints.fire")}</span>
-                    <span className="text-mist/25">·</span>
-                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">B</kbd>
-                    <span>{t("game.hints.shelter")}</span>
-                    <span className="text-mist/25">·</span>
-                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">Échap</kbd>
-                    <span>{t("game.hints.pause")}</span>
-                  </div>
-                )}
                 {ambient && (
                   <p className="max-w-xl rounded-full bg-canopy-950/50 px-4 py-1 text-center text-[0.68rem] italic text-mist/65 backdrop-blur-sm">
                     {ambient}
@@ -1339,6 +1337,20 @@ export default function MinkebeGame() {
                     title={`${t("game.dress")} · ⇧O`}
                   >
                     🪡
+                  </button>
+                  <button
+                    type="button"
+                    className={`grid h-8 w-8 place-items-center rounded-full border text-xs backdrop-blur-sm transition ${
+                      showControls
+                        ? "border-parchment/40 bg-parchment/15 text-parchment"
+                        : "border-mist/15 bg-canopy-950/55 text-parchment/80 hover:bg-canopy-800/80"
+                    }`}
+                    onClick={() => openControls(!showControls)}
+                    aria-expanded={showControls}
+                    aria-label={t("controls.open")}
+                    title={`${t("controls.open")} · H`}
+                  >
+                    ⌨
                   </button>
                   <button
                     type="button"
@@ -1470,6 +1482,14 @@ export default function MinkebeGame() {
                   {t("game.fire")}
                 </button>
               </div>
+
+              {showControls && (
+                <ControlsPanel
+                  label={(key) => t(key)}
+                  locale={locale}
+                  onClose={() => openControls(false)}
+                />
+              )}
 
               {showMap && hud && (
                 <div className="absolute right-3 top-32 z-20 w-64 md:right-5 md:w-80">
@@ -1673,7 +1693,7 @@ export default function MinkebeGame() {
                       }`}
                       aria-pressed={characterId === candidate.id}
                     >
-                      <span>{candidate.id === "michelle" || candidate.id === "chercheuse" ? "🧑🏾‍🌾" : "🧑🏾‍🚀"}</span>
+                      <span>{candidate.id === "chercheuse" ? "🧑🏾‍🔬" : "🧑🏾‍🌾"}</span>
                       {candidate.name}
                       <span className="text-[0.6rem] text-mist/50">{candidate.role}</span>
                     </button>
@@ -1700,7 +1720,8 @@ export default function MinkebeGame() {
                 </div>
 
                 <p className="text-[0.7rem] text-mist/45">
-                  {t("game.controls")} · {t("game.mobile")}
+                  <kbd className="rounded bg-canopy-800 px-1 text-parchment/80">H</kbd>{" "}
+                  {t("controls.open")} · {t("game.mobile")}
                 </p>
               </div>
             </div>
@@ -1734,6 +1755,30 @@ export default function MinkebeGame() {
                     {hud?.visitedZones.length ?? 0} zone(s) explorée(s).
                   </p>
                 </div>
+                <details className="rounded-xl border border-mist/10 bg-canopy-900/50 p-3 text-xs text-mist/70">
+                  <summary className="cursor-pointer select-none font-semibold text-parchment">
+                    ⌨ {t("controls.open")}
+                  </summary>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {CONTROL_GROUPS.map((group) => (
+                      <section key={group.key}>
+                        <p className="mb-1 text-[0.55rem] uppercase tracking-[0.2em] text-moss-300">
+                          {t(group.key)}
+                        </p>
+                        <ul className="space-y-0.5">
+                          {group.rows.map((row) => (
+                            <li key={row.label} className="flex items-baseline gap-1.5 text-[0.62rem]">
+                              <kbd className="shrink-0 rounded bg-canopy-800 px-1 py-0.5 font-sans text-[0.55rem] text-parchment/85">
+                                {localiseKeys(row.keys, locale)}
+                              </kbd>
+                              <span>{t(row.label)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ))}
+                  </div>
+                </details>
                 {saveStatus && <p className="text-xs text-amber-glow">{saveStatus}</p>}
               </div>
             </div>
@@ -2025,6 +2070,128 @@ function FieldKit({
           I
         </button>
       </span>
+    </div>
+  );
+}
+
+/**
+ * Les commandes, en un seul bloc dépliable.
+ *
+ * Dix-huit raccourcis affichés en permanence ne sont pas une aide : c'est un
+ * ruban de texte en travers de la forêt, qu'on ne lit plus au bout de trente
+ * secondes. Ils sont donc rangés ici, par geste — se déplacer, chasser,
+ * survivre, l'interface — et n'apparaissent qu'à la demande : le bouton
+ * « Commandes », ou la touche `H`.
+ */
+/**
+ * Les noms de touches. Ce sont des noms propres au clavier, pas des phrases :
+ * ils ne se traduisent pas mot à mot, mais « Maj » ne veut rien dire pour un
+ * joueur anglophone. On les remplace donc jeton par jeton selon la langue.
+ */
+const KEY_LABELS: Record<string, { fr: string; en: string }> = {
+  Maj: { fr: "Maj", en: "Shift" },
+  Espace: { fr: "Espace", en: "Space" },
+  "Échap": { fr: "Échap", en: "Esc" },
+  Clic: { fr: "Clic", en: "Click" },
+  "Ctrl / clic droit": { fr: "Ctrl / clic droit", en: "Ctrl / right click" },
+};
+
+const localiseKeys = (keys: string, locale: string) =>
+  KEY_LABELS[keys]?.[locale === "en" ? "en" : "fr"] ?? keys;
+
+const CONTROL_GROUPS: { key: DictionaryKey; rows: { keys: string; label: DictionaryKey }[] }[] = [
+  {
+    key: "controls.move",
+    rows: [
+      { keys: "ZQSD / WASD", label: "game.hints.walk" },
+      { keys: "Maj", label: "game.hints.run" },
+      { keys: "Espace", label: "controls.jump" },
+      { keys: "C", label: "game.hints.crouch" },
+      { keys: "Ctrl / clic droit", label: "controls.block" },
+    ],
+  },
+  {
+    key: "controls.hunt",
+    rows: [
+      { keys: "Clic", label: "controls.fire" },
+      { keys: "1-6", label: "controls.weapons" },
+      { keys: "R", label: "controls.reload" },
+      { keys: "E", label: "controls.skin" },
+      { keys: "V", label: "controls.view" },
+    ],
+  },
+  {
+    key: "controls.survive",
+    rows: [
+      { keys: "E", label: "controls.drink" },
+      { keys: "F", label: "controls.eat" },
+      { keys: "G", label: "controls.grill" },
+      { keys: "B", label: "controls.shelter" },
+      { keys: "N", label: "controls.sleep" },
+      { keys: "I", label: "controls.goggles" },
+      { keys: "⇧O", label: "controls.dress" },
+    ],
+  },
+  {
+    key: "controls.interface",
+    rows: [
+      { keys: "M", label: "controls.map" },
+      { keys: "P", label: "controls.mouseLook" },
+      { keys: "Échap", label: "controls.pause" },
+      { keys: "H", label: "controls.open" },
+    ],
+  },
+];
+
+function ControlsPanel({
+  label,
+  locale,
+  onClose,
+}: {
+  label: (key: DictionaryKey) => string;
+  locale: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="pointer-events-auto absolute bottom-14 left-1/2 z-30 w-[min(92vw,46rem)] -translate-x-1/2">
+      <div className="panel max-h-[62vh] overflow-y-auto p-3 md:p-4">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">{label("controls.title")}</p>
+            <p className="text-[0.62rem] text-mist/50">{label("controls.hint")}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-mist/20 px-2 py-0.5 text-[0.6rem] text-mist/70 transition hover:text-parchment"
+            aria-label={label("controls.close")}
+          >
+            ✕ <kbd className="opacity-60">H</kbd>
+          </button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {CONTROL_GROUPS.map((group) => (
+            <section key={group.key}>
+              <p className="mb-1 text-[0.55rem] uppercase tracking-[0.2em] text-moss-300">
+                {label(group.key)}
+              </p>
+              <ul className="space-y-1">
+                {group.rows.map((row) => (
+                  <li key={row.label} className="flex items-baseline gap-1.5 text-[0.62rem] leading-snug">
+                    <kbd className="shrink-0 rounded bg-canopy-800 px-1 py-0.5 font-sans text-[0.55rem] text-parchment/85">
+                      {localiseKeys(row.keys, locale)}
+                    </kbd>
+                    <span className="text-mist/65">{label(row.label)}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <p className="mt-2 border-t border-mist/10 pt-1.5 text-[0.58rem] text-mist/45">
+          {label("controls.touch")}
+        </p>
+      </div>
     </div>
   );
 }

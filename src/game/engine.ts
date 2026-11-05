@@ -139,6 +139,15 @@ export interface InputState {
   block?: boolean;
   /** Direction de déplacement (radians) si piloté au joystick tactile. */
   joystick?: { x: number; y: number } | null;
+  /**
+   * Cap de la caméra, en radians (0 = nord, soit −Z, sens horaire).
+   *
+   * Les touches de déplacement sont **relatives au regard**, pas au monde :
+   * « avant » veut dire « là où je regarde ». Sans ce cap, avancer obligeait à
+   * marcher plein nord quelle que soit l'orientation de la caméra — et le
+   * personnage partait de travers par rapport à l'écran.
+   */
+  cameraYaw?: number;
 }
 
 export const SAVE_VERSION = 6;
@@ -147,7 +156,7 @@ export function initialHunt(): HuntState {
   return { arsenal: initialArsenalState(), meat: 0, harvested: 0, kills: {}, shots: 0 };
 }
 
-export function newGame(characterId = "michelle"): GameState {
+export function newGame(characterId = "mbadinga"): GameState {
   const character = getCharacter(characterId as Character["id"]);
   return {
     version: SAVE_VERSION,
@@ -302,23 +311,41 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
       ? "sneak"
       : "walk";
 
-  let dx = 0;
-  let dz = 0;
+  // --- Déplacement relatif au regard
+  //
+  // Repère du jeu : le nord est −Z, un cap de 0 regarde vers −Z, et le modèle
+  // du personnage est tourné vers −Z dans son propre repère. Un cap `h` a donc
+  // pour direction (−sin h, −cos h), et sa droite (−cos h, +sin h).
+  const camYaw = input.cameraYaw ?? 0;
+  const forwardX = -Math.sin(camYaw);
+  const forwardZ = -Math.cos(camYaw);
+  const rightX = -forwardZ;
+  const rightZ = forwardX;
+
+  let ahead = 0;
+  let aside = 0;
   if (input.joystick && (input.joystick.x !== 0 || input.joystick.y !== 0)) {
-    dx = input.joystick.x;
-    dz = input.joystick.y;
+    // Joystick : y négatif = poussé vers le haut = avancer.
+    aside = input.joystick.x;
+    ahead = -input.joystick.y;
   } else {
-    if (input.forward) dz -= 1;
-    if (input.backward) dz += 1;
-    if (input.left) dx -= 1;
-    if (input.right) dx += 1;
+    if (input.forward) ahead += 1;
+    if (input.backward) ahead -= 1;
+    if (input.right) aside += 1;
+    if (input.left) aside -= 1;
   }
+
+  let dx = forwardX * ahead + rightX * aside;
+  let dz = forwardZ * ahead + rightZ * aside;
 
   const magnitude = Math.hypot(dx, dz);
   if (magnitude > 0.01) {
     dx /= magnitude;
     dz /= magnitude;
-    next.player.heading = Math.atan2(dx, -dz);
+    // Cap du modèle : il regarde vers −Z, donc son angle est l'inverse du
+    // vecteur de marche. C'est aussi la convention de la boussole et de la
+    // carte (`0 = nord, sens horaire`).
+    next.player.heading = Math.atan2(-dx, -dz);
 
     const [px, , pz] = next.player.position;
     const swim = swimState(px, pz, next.elapsed, worldClock(next.elapsed, next.settings).hour);

@@ -1,9 +1,19 @@
 /**
  * Personnages jouables et PNJ.
- * Modèles glTF chargés depuis /models (Michelle.glb, Soldier.glb).
+ *
+ * Le personnage par défaut est un homme africain, écogarde à Makokou : c'est
+ * lui qu'on incarne dans la forêt de Minkébé, dans l'Ogooué-Ivindo. Les autres
+ * profils existent pour le multijoueur et le vestiaire, mais le corps affiché
+ * est le même — un seul modèle est construit, et il doit ressembler à l'homme
+ * qui vit ici.
  */
 
-export type CharacterId = "michelle" | "soldier" | "guide" | "chercheuse";
+export type CharacterId = "mbadinga" | "soldier" | "guide" | "chercheuse";
+
+/** Ancien identifiant (avant le renommage) : les sauvegardes le contiennent. */
+export const LEGACY_CHARACTER_IDS: Record<string, CharacterId> = {
+  michelle: "mbadinga",
+};
 
 export interface CharacterStats {
   /** Vitesse de marche (unités/s). */
@@ -35,12 +45,12 @@ export interface Character {
 
 export const CHARACTERS: Character[] = [
   {
-    id: "michelle",
-    name: "Michelle",
-    role: "Garde du parc",
+    id: "mbadinga",
+    name: "Aubin Mbadinga",
+    role: "Écogarde",
     model: "/models/Michelle.glb",
     scale: 1,
-    bio: "Écogarde formée à Makokou. Connaît chaque sentier de Minkébé et lit les traces mieux qu'un GPS.",
+    bio: "Écogarde de Makokou, dans l'Ogooué-Ivindo. Il a grandi au bord de l'Ivindo : il lit les traces mieux qu'un GPS et sait où l'eau reste propre en saison sèche.",
     stats: {
       walkSpeed: 1.6,
       runSpeed: 4.4,
@@ -108,8 +118,9 @@ export const CHARACTERS: Character[] = [
   },
 ];
 
-export function getCharacter(id: CharacterId): Character {
-  return CHARACTERS.find((c) => c.id === id) ?? CHARACTERS[0];
+export function getCharacter(id: CharacterId | string): Character {
+  const resolved = LEGACY_CHARACTER_IDS[id] ?? id;
+  return CHARACTERS.find((c) => c.id === resolved) ?? CHARACTERS[0];
 }
 
 export function defaultCharacter(): Character {

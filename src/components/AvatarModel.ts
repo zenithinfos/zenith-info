@@ -24,6 +24,7 @@
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { SKIN_GLB_TINT, SKIN_SHEEN } from "@/game/appearance";
 import { type WeaponId } from "@/game/hunting";
 import { createWeaponModel, disposeWeaponModel } from "./WeaponModels";
 import { type HumanPose, type HumanRig } from "./HumanModel";
@@ -97,10 +98,22 @@ function dressForForest(root: THREE.Object3D): THREE.Material[] {
       name.includes("hair") ||
       name.includes("head")
     ) {
-      first.roughness = name.includes("skin") ? 0.62 : 0.8;
+      first.roughness = name.includes("skin") ? 0.58 : 0.8;
       first.metalness = 0;
-      if (name.includes("skin") && "sheen" in first) {
-        (first as THREE.MeshPhysicalMaterial).sheen = 0.3;
+      if (name.includes("skin")) {
+        // La peau du modèle importé est une texture claire. On ne la remplace
+        // pas : on la multiplie. Les pores, les taches et les plis de la carte
+        // d'origine restent, seule la carnation descend — c'est la seule façon
+        // d'obtenir un visage qui ne soit pas un aplat de couleur.
+        first.color.set(SKIN_GLB_TINT);
+        // Un peu de reflet diffus : sans lui, une peau foncée sous la canopée
+        // se lit comme une silhouette découpée.
+        if ("sheen" in first) {
+          const physical = first as THREE.MeshPhysicalMaterial;
+          physical.sheen = 0.45;
+          physical.sheenColor.set(SKIN_SHEEN);
+          physical.sheenRoughness = 0.6;
+        }
       }
       // Le chapeau de ville devient un feutre de brousse : même forme, autre
       // matière. Un fedora noir au milieu de la forêt ne pardonne pas.

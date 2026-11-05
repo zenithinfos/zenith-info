@@ -117,8 +117,9 @@ export default function LandingPage() {
             <p className="eyebrow">{t("game.kicker")}</p>
             <h2 className="display mt-1 text-2xl text-parchment sm:text-3xl">{t("game.title")}</h2>
           </div>
-          <p className="text-[0.68rem] text-mist/45">
-            {t("game.controls")} · {t("game.mobile")}
+          <p className="max-w-md text-[0.68rem] text-mist/45">
+            <kbd className="rounded bg-canopy-800 px-1 text-parchment/80">H</kbd>{" "}
+            {t("controls.open")} · {t("game.mobile")}
           </p>
         </div>
         <MinkebeGame />

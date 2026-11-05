@@ -1781,7 +1781,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // ------------------------------------------------------------------
     // Caméra libre
     // ------------------------------------------------------------------
-    let yaw = Math.PI;
+    // Cap absolu de la caméra (0 = nord, −Z). C'est lui qui commande le
+    // déplacement : le personnage va là où l'on regarde, il ne tourne plus la
+    // caméra en marchant de travers.
+    let yaw = DEFAULT_START.heading;
     let pitch = 0;
     let pointerLocked = false;
 
@@ -1999,7 +2002,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       const sway = moving ? Math.sin(bob * 0.5) * 0.012 : 0;
 
       const groundUnderPlayer = terrainHeight(playerPosition.x, playerPosition.z);
-      const targetYaw = targetHeading + yaw - Math.PI;
+      const targetYaw = yaw;
 
       // Déplacement réel depuis l'image précédente : c'est la seule source
       // fiable pour savoir de quel côté le personnage doit regarder.
@@ -2021,8 +2024,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         playerRig.group.visible = true;
         playerRig.group.position.set(playerPosition.x, bodyY, playerPosition.z);
         if (stepLength > 0.0015) {
-          // Il marche là où il va, pas là où la caméra pointe.
-          const desired = Math.atan2(-stepX, -stepZ);
+          // Il marche là où il va. Le cap vient du moteur (`targetHeading`),
+          // déjà dans le bon repère : c'est la direction réelle du pas, pas
+          // une estimation à partir de deux images.
+          const desired = targetHeading;
           rigYaw += wrapAngle(desired - rigYaw) * Math.min(1, dt * 9);
         } else if (aiming) {
           // Immobile et en joue : le corps pivote avec le regard.

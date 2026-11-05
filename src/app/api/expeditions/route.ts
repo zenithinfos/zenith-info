@@ -56,7 +56,7 @@ export async function GET(request: Request) {
 /** Crée une expédition (identifiant + point de départ) sans persistance. */
 const CreateSchema = z.object({
   zoneId: z.string().default("camp"),
-  characterId: z.string().default("michelle"),
+  characterId: z.string().default("mbadinga"),
 });
 
 export async function POST(request: Request) {

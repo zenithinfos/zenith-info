@@ -44,7 +44,7 @@ const dir = await mkdtemp(path.join(tmpdir(), "minkebe-avatar-"));
 const bundle = path.join(dir, "pose.mjs");
 await build({
   stdin: {
-    contents: `export * from "./src/components/avatarRig.ts";`,
+    contents: `export * from "./src/components/avatarRig.ts"; export * from "./src/game/appearance.ts";`,
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -57,6 +57,7 @@ await build({
 });
 const THREE = await import("three");
 const rigModule = await import(`${bundle}?t=${Date.now()}`);
+const { linearOf, SKIN_TARGET } = rigModule;
 await rm(dir, { recursive: true, force: true });
 
 /* ------------------------------------------------------------------ */
@@ -253,6 +254,13 @@ const SS = 2;
 const PANELS = [{ yaw: 0 }, { yaw: 0.62 }, { yaw: -Math.PI * 0.5 }];
 const W = PANEL * PANELS.length * SS;
 const H = PANEL * SS;
+// La carnation du personnage vient du jeu, pas d'une valeur de maquette :
+// l'aperçu doit montrer l'homme qui sera joué, pas un mannequin de plâtre.
+// Ce que verra le joueur : la carnation visée, telle quelle. L'aperçu ne
+// rejoue pas la multiplication par la texture (il n'a pas les cartes), mais il
+// montre la bonne couleur au lieu d'un mannequin de plâtre.
+const SKIN = linearOf(SKIN_TARGET);
+
 const buffer = new Float32Array(W * H * 3).fill(0.05);
 const depth = new Float32Array(W * H).fill(-Infinity);
 const light = [-0.35, 0.55, -0.75];
@@ -312,9 +320,9 @@ PANELS.forEach((panel, panelIndex) => {
         const i = y * W + x;
         if (z < depth[i]) continue;
         depth[i] = z;
-        buffer[i * 3] = 0.68 * shade;
-        buffer[i * 3 + 1] = 0.58 * shade;
-        buffer[i * 3 + 2] = 0.47 * shade;
+        buffer[i * 3] = SKIN[0] * shade;
+        buffer[i * 3 + 1] = SKIN[1] * shade;
+        buffer[i * 3 + 2] = SKIN[2] * shade;
       }
     }
   }

@@ -22,7 +22,7 @@ export default function Dressing({
   level = 1,
   threads = 0,
   woven = [],
-  characterId = "michelle",
+  characterId = "mbadinga",
   outfitId = "explorateur",
   onChange,
   onWeave,

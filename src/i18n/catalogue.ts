@@ -113,7 +113,7 @@ const OUTFITS_EN: Record<string, OutfitCopy> = {
 };
 
 const CHARACTERS_EN: Record<string, CharacterCopy> = {
-  michelle: { name: "Michelle", role: "Park ranger" },
+  mbadinga: { name: "Aubin Mbadinga", role: "Park ranger" },
   soldier: { name: "The Soldier", role: "Scout" },
   guide: { name: "Nkoul", role: "Tracker" },
   chercheuse: { name: "Dr. Owori", role: "Researcher" },
