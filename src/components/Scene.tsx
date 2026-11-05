@@ -1858,6 +1858,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           uVignette: { value: 0.18 },
           uGrain: { value: 0.035 },
           uGoggles: { value: 0 },
+          uSat: { value: 0.68 },
         },
         vertexShader: `
           varying vec2 vUv;
@@ -1872,6 +1873,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           uniform float uVignette;
           uniform float uGrain;
           uniform float uGoggles;
+          uniform float uSat;
           varying vec2 vUv;
 
           float rand(vec2 co) {
@@ -1881,17 +1883,29 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           void main() {
             vec3 colour = texture2D(tDiffuse, vUv).rgb;
 
-            // Légère désaturation : une forêt filmée n'est jamais aussi
-            // saturée qu'un dessin.
-            float luma = dot(colour, vec3(0.299, 0.587, 0.114));
-            colour = mix(vec3(luma), colour, 0.86);
+            // Désaturation — et pas une petite. Une forêt filmée n'est jamais
+            // aussi saturée qu'un rendu 3D : le premier réglage (86 %) suffisait
+            // pour une feuille isolée, pas pour un plein écran de feuillage.
+            // Trois cents mètres carrés de vert à 45 % de saturation, cela
+            // devient une affiche.
+            //
+            // La désaturation est pondérée : une couleur déjà vive perd
+            // davantage qu'une couleur déjà sourde. C'est ainsi que travaille
+            // une pellicule — les verts de canopée redescendent, les bruns et
+            // les ocres du sol restent.
+            float luma = dot(colour, vec3(0.2126, 0.7152, 0.0722));
+            float chroma = max(colour.r, max(colour.g, colour.b)) - min(colour.r, min(colour.g, colour.b));
+            float vivid = smoothstep(0.02, 0.30, chroma);
+            float keep = uSat - (1.0 - uSat) * 0.45 * vivid;
+            colour = mix(vec3(luma), colour, clamp(keep, 0.0, 1.0));
 
             // Réchauffement des lumières, refroidissement des ombres.
             colour += vec3(0.035, 0.018, -0.012) * smoothstep(0.45, 1.0, luma);
             colour += vec3(-0.012, 0.0, 0.02) * (1.0 - smoothstep(0.0, 0.45, luma));
 
-            // Contraste en S, très léger.
-            colour = clamp((colour - 0.5) * 1.06 + 0.5, 0.0, 1.0);
+            // Contraste en S, très léger : le contraste ajoute de la saturation
+            // perçue, on ne peut donc pas pousser les deux en même temps.
+            colour = clamp((colour - 0.5) * 1.04 + 0.5, 0.0, 1.0);
 
             // Vignettage.
             vec2 d = vUv - 0.5;

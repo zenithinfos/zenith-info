@@ -66,8 +66,50 @@ const TEXTURES = {
   bigleaf: [71, 107, 84],
 };
 
-/** sRGB moyen de la texture × teinte → couleur affichée. */
-function shown(texture, tint, up = 1, gain = 1) {
+/**
+ * Étalonnage de fin de chaîne, identique au shader `gradePass` de Scene.tsx.
+ *
+ * Deux réglages, dans cet ordre : la courbe en S, puis la désaturation
+ * pondérée. Le contraste ajoute de la saturation perçue ; c'est pour cela que
+ * la désaturation vient après lui, jamais avant.
+ */
+// `OLD_GRADE=1 node scripts/check-palette.mjs` rejoue l'étalonnage précédent
+// (86 %, courbe 1,06) : c'est ainsi qu'on chiffre un avant/après au lieu de
+// discuter d'une impression.
+const LEGACY = process.env.OLD_GRADE === "1";
+
+function grade(rgb, { sat = LEGACY ? 0.86 : 0.68, contrast = LEGACY ? 1.06 : 1.04 } = {}) {
+  const out = rgb.map((v) => Math.min(1, Math.max(0, (v - 0.5) * contrast + 0.5)));
+  const luma = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+  const mx = Math.max(...out);
+  const mn = Math.min(...out);
+  const vivid = LEGACY ? 0 : smoothstep(0.02, 0.3, mx - mn);
+  const keep = Math.max(0, sat - (1 - sat) * 0.45 * vivid);
+  return out.map((v) => luma + (v - luma) * keep);
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Saturation HSV d'une couleur sRGB 0-255, en %. */
+function saturation(rgb) {
+  const max = Math.max(...rgb) / 255;
+  const min = Math.min(...rgb) / 255;
+  return max <= 0 ? 0 : Math.round(((max - min) / max) * 100);
+}
+
+/**
+ * Couleur physique : albédo × lumière × ACES → sRGB, sans étalonnage.
+ *
+ * C'est cette chaîne-là que `solveTint` inverse. Les teintes sont une
+ * correction de texture ; l'étalonnage est un parti pris d'image appliqué
+ * par-dessus. Résoudre une teinte *à travers* l'étalonnage obligerait à
+ * pousser les verts jusqu'au néon pour compenser la désaturation — et une
+ * texture néon reste néon dans les coins d'ombre.
+ */
+function raw(texture, tint, up = 1, gain = 1) {
   const t = [(texture[0] * ((tint >> 16) & 255)) / 255, (texture[1] * ((tint >> 8) & 255)) / 255, (texture[2] * (tint & 255)) / 255];
   const albedo = lin((Math.min(255, Math.round(t[0] * gain)) << 16) | (Math.min(255, Math.round(t[1] * gain)) << 8) | Math.min(255, Math.round(t[2] * gain)));
   const out = [0, 0, 0];
@@ -76,7 +118,12 @@ function shown(texture, tint, up = 1, gain = 1) {
     const irradiance = budget.ambient + budget.hemisphere * hemi + budget.environment * ENV[i] + budget.sun * 0.25;
     out[i] = aces((albedo[i] / Math.PI) * irradiance * budget.exposure);
   }
-  return out.map((v) => Math.round(Math.min(1, Math.max(0, (srgb(v) - 0.5) * 1.06 + 0.5)) * 255));
+  return out.map((v) => srgb(v));
+}
+
+/** Couleur telle qu'elle arrive à l'œil, étalonnage compris. */
+function shown(texture, tint, up = 1, gain = 1) {
+  return grade(raw(texture, tint, up, gain)).map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255));
 }
 
 /**
@@ -99,7 +146,7 @@ function solveTint(texture, target) {
     let hi = 255;
     for (let i = 0; i < 18; i++) {
       const mid = Math.round((lo + hi) / 2);
-      if (shown(texture, packed(mid))[c] < target[c]) lo = mid;
+      if (raw(texture, packed(mid))[c] * 255 < target[c]) lo = mid;
       else hi = mid;
     }
     out[c] = Math.round((lo + hi) / 2);
@@ -146,6 +193,27 @@ for (const m of MATIERES) {
   });
 }
 
+/* ---------------- saturation ---------------- */
+
+/**
+ * La saturation, en pourcentage HSV, de ce qui arrive à l'œil.
+ *
+ * C'est le chiffre qui manquait : la luminescence disait « la forêt est
+ * lisible », pas « la forêt est criarde ». Une feuille de sous-bois
+ * photographiée tient entre 20 et 32 % ; au-delà de 38 %, un plein écran de
+ * feuillage vire à l'affiche. Ce contrôle échoue si une matière dépasse.
+ */
+const SAT_CAP = 38;
+const saturations = rows.map((r) => ({ label: r.label, before: saturation(r.now), after: saturation(r.next) }));
+let oversaturated = 0;
+for (const row of saturations) {
+  const flag = row.before > SAT_CAP ? `  ← au-dessus de ${SAT_CAP} %` : "";
+  if (row.before > SAT_CAP) oversaturated += 1;
+  console.log(`  ${row.label.padEnd(18)} saturation ${String(row.before).padStart(3)} %  →  ${String(row.after).padStart(3)} %${flag}`);
+}
+const meanSat = Math.round(saturations.reduce((sum, row) => sum + row.before, 0) / saturations.length);
+const meanAfter = Math.round(saturations.reduce((sum, row) => sum + row.after, 0) / saturations.length);
+
 /* ---------------- planche ---------------- */
 
 const W = 900;
@@ -179,4 +247,9 @@ for (const r of rows) {
 }
 const mean = (rgb) => Math.round((rgb[0] + rgb[1] + rgb[2]) / 3);
 console.log("\nmoyenne actuelle", Math.round(rows.reduce((s, r) => s + mean(r.now), 0) / rows.length), "% · proposée", Math.round(rows.reduce((s, r) => s + mean(r.next), 0) / rows.length), "%");
+console.log(`saturation moyenne ${meanSat} % → ${meanAfter} % (plafond ${SAT_CAP} %)`);
+if (oversaturated > 0) {
+  console.log(`\n${oversaturated} matière(s) trop saturée(s).`);
+  process.exitCode = 1;
+}
 void readFile;

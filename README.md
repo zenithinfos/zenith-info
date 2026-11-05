@@ -225,6 +225,22 @@ et `crownCards` avec le jeu. Il ne remplace pas le rendu WebGL (pas de PBR,
 ni d'ombres portées, ni de bloom) : il sert à contrôler la structure et la
 densité, pas la lumière.
 
+### Couleur et saturation
+
+Deux contrôles chiffrent ce qui se voit, parce qu'« on dirait que c'est
+saturé » ne se corrige pas :
+
+- `scripts/check-palette.mjs` calcule la couleur affichée de chaque matière
+  (albédo mesuré de la texture × teinte × lumière × ACES × étalonnage) et
+  refuse une saturation supérieure à **38 %** — au-delà, un plein écran de
+  feuillage vire à l'affiche. `OLD_GRADE=1` rejoue l'étalonnage précédent.
+- `scripts/check-light.mjs` mesure la luminance de jour et de nuit.
+
+L'étalonnage (`gradePass` dans `Scene.tsx`) désature à **68 %**, et davantage
+encore sur les couleurs déjà vives : c'est ainsi que travaille une pellicule.
+Le feuillage de canopée redescend, les bruns et les ocres du sol restent.
+`npm run preview:scene` rend la forêt avec le même étalonnage, pour comparer.
+
 ## Cours d'eau
 
 Les plans d'eau ne sont plus des rectangles posés sur le relief. Chacun est

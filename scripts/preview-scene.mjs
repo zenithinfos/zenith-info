@@ -483,6 +483,24 @@ function capsuleHit(o, d, trunk, bestT) {
   return null;
 }
 
+/**
+ * Étalonnage identique au jeu : courbe en S, puis désaturation pondérée.
+ * `OLD_GRADE=1` rejoue le réglage précédent (86 %, courbe 1,06) pour juger un
+ * avant/après sur la même image.
+ */
+const LEGACY_GRADE = process.env.OLD_GRADE === "1";
+function grade(rgb) {
+  const contrast = LEGACY_GRADE ? 1.06 : 1.04;
+  const sat = LEGACY_GRADE ? 0.86 : 0.68;
+  const out = rgb.map((v) => Math.min(1, Math.max(0, (v - 0.5) * contrast + 0.5)));
+  const luma = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+  const chroma = Math.max(...out) - Math.min(...out);
+  const t = Math.min(1, Math.max(0, (chroma - 0.02) / 0.28));
+  const vivid = LEGACY_GRADE ? 0 : t * t * (3 - 2 * t);
+  const keep = Math.max(0, sat - (1 - sat) * 0.45 * vivid);
+  return out.map((v) => luma + (v - luma) * keep);
+}
+
 function render(scene, game, camera, textures) {
   const { quads, trunks, grid, cell } = scene;
   const fov = (62 * Math.PI) / 180;
@@ -743,9 +761,18 @@ function render(scene, game, camera, textures) {
       }
 
       const i = (py * WIDTH + px) * 3;
-      pixels[i] = Math.min(255, Math.round(r ** (1 / 1.6) * 255));
-      pixels[i + 1] = Math.min(255, Math.round(g ** (1 / 1.6) * 255));
-      pixels[i + 2] = Math.min(255, Math.round(b ** (1 / 1.6) * 255));
+      // Étalonnage de fin de chaîne, dans l'espace d'affichage : la même
+      // courbe et la même désaturation pondérée que `gradePass` dans
+      // Scene.tsx. Sans lui, cet aperçu montrait une forêt plus verte que
+      // celle du jeu — et servait donc à juger autre chose.
+      const graded = grade([
+        Math.min(1, Math.max(0, r ** (1 / 1.6))),
+        Math.min(1, Math.max(0, g ** (1 / 1.6))),
+        Math.min(1, Math.max(0, b ** (1 / 1.6))),
+      ]);
+      pixels[i] = Math.min(255, Math.round(graded[0] * 255));
+      pixels[i + 1] = Math.min(255, Math.round(graded[1] * 255));
+      pixels[i + 2] = Math.min(255, Math.round(graded[2] * 255));
     }
   }
 

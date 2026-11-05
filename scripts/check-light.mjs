@@ -79,9 +79,16 @@ function shade(budget, albedoHex, up, sunShare) {
     // BRDF diffuse de three : albedo / π.
     out[i] = aces((albedo[i] / Math.PI) * irradiance * budget.exposure);
   }
-  // Étalonnage de fin de chaîne : il s'applique maintenant en espace
-  // d'affichage (courbe en S + vignettage), pas sur des valeurs linéaires.
-  return out.map(toSrgb).map((v) => Math.min(1, Math.max(0, (v - 0.5) * 1.06 + 0.5)));
+  // Étalonnage de fin de chaîne : courbe en S puis désaturation pondérée,
+  // exactement comme `gradePass` dans Scene.tsx. L'ordre compte : le
+  // contraste ajoute de la saturation perçue, la désaturation vient après.
+  const graded = out.map(toSrgb).map((v) => Math.min(1, Math.max(0, (v - 0.5) * 1.04 + 0.5)));
+  const luma = 0.2126 * graded[0] + 0.7152 * graded[1] + 0.0722 * graded[2];
+  const chroma = Math.max(...graded) - Math.min(...graded);
+  const t = Math.min(1, Math.max(0, (chroma - 0.02) / 0.28));
+  const vivid = t * t * (3 - 2 * t);
+  const keep = 0.68 - 0.32 * 0.45 * vivid;
+  return graded.map((v) => luma + (v - luma) * keep);
 }
 
 const pct = (rgb) => rgb.map((v) => Math.round(v * 100));
@@ -104,7 +111,9 @@ const mix = (rgb, hex) => {
   const t = [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255];
   return (rgb[0] << 16) | (Math.round((rgb[1] * t[1]) / 255) << 8) | Math.round((rgb[2] * t[2]) / 255);
 };
-const LEAF = mix([77, 111, 83], 0xedb29a);
+// Teinte réellement posée sur `TEXTURES.foliage` dans Scene.tsx : c'est la
+// seule façon que ce contrôle mesure la forêt du jeu et pas une autre.
+const LEAF = mix([77, 111, 83], 0xfbb092);
 const BARK = mix([74, 63, 48], 0xc9c2b2);
 // ground.jpg (47/38/24) × gain 1,65 × couleur de sommet moyenne 0,9
 const SOIL = [Math.round(47 * 1.8 * 0.9), Math.round(38 * 1.7 * 0.9), Math.round(24 * 1.55 * 0.9)];

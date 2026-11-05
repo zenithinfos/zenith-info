@@ -185,6 +185,7 @@ const fr = {
   "survival.levels.title": "Niveaux 1 à 50",
   "survival.levels.desc":
     "Chaque action utile rapporte de l'XP : abattre, dépecer, observer, bâtir, ramasser un Mewa. Le Prix de Survie se décroche à 2 500 XP.",
+  "game.day": "jour",
   "game.hints.jump": "sauter",
   "game.hints.block": "parer",
   "game.hints.shelter": "bâtir un abri",
@@ -514,6 +515,7 @@ const en: Dictionary = {
   "survival.levels.title": "Levels 1 to 50",
   "survival.levels.desc":
     "Every useful action earns XP: killing, skinning, observing, building, collecting a Mewa. The Survival Prize unlocks at 2,500 XP.",
+  "game.day": "day",
   "game.hints.jump": "jump",
   "game.hints.block": "parry",
   "game.hints.shelter": "build a shelter",

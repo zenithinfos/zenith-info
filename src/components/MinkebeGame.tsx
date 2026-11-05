@@ -1146,65 +1146,57 @@ export default function MinkebeGame() {
           {phase === "jeu" && hud && (
             <>
               <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-3 p-3 md:p-5">
-                <div className="space-y-2">
-                  <div className="pointer-events-auto panel-tight px-3 py-2">
-                    <p className="eyebrow">{clock.phase} · jour {clock.day}</p>
-                    <p className="display text-lg leading-tight text-parchment">{zone?.name}</p>
-                    <p className="text-[0.65rem] text-mist/60">
-                      {String(Math.floor(clock.hour)).padStart(2, "0")}:
-                      {String(Math.floor((clock.hour % 1) * 60)).padStart(2, "0")} ·{" "}
-                      {weatherLabel(hud.weather.current)} · {Math.round(hud.vitals.temperature)} °C
-                    </p>
+                <div className="space-y-1.5">
+                  {/* Une seule carte : lieu, heure, jauges, expérience, paquetage */}
+                  <div className="pointer-events-auto panel-tight w-[15.5rem] divide-y divide-mist/10 overflow-hidden">
+                    <div className="px-3 py-1.5">
+                      <p className="text-[0.55rem] uppercase tracking-[0.24em] text-moss-300">
+                        {clock.phase} · {t("game.day")} {clock.day}
+                      </p>
+                      <p className="mt-0.5 flex items-baseline justify-between gap-2">
+                        <span className="display truncate text-sm leading-tight text-parchment">
+                          {zone?.name}
+                        </span>
+                        <span className="shrink-0 text-[0.55rem] tabular-nums text-mist/45">
+                          {String(Math.floor(clock.hour)).padStart(2, "0")}:
+                          {String(Math.floor((clock.hour % 1) * 60)).padStart(2, "0")} ·{" "}
+                          {weatherLabel(hud.weather.current)} · {Math.round(hud.vitals.temperature)} °C
+                        </span>
+                      </p>
+                    </div>
+                    <Vitals vitals={hud.vitals} xp={hud.xp} level={hud.level} label={(key) => t(key)} />
+                    <FieldKit
+                      state={hud}
+                      label={(key) => t(key)}
+                      onBuild={shelterUp}
+                      onSleep={sleep}
+                      onGoggles={goggles}
+                      nearShelter={Boolean(nearestShelter(hud, 3.5))}
+                    />
                   </div>
-                  <Vitals vitals={hud.vitals} label={(key) => t(key)} />
-                  <LevelBar xp={hud.xp} level={hud.level} label={(key) => t(key)} />
-                  <FieldKit
-                    className="pointer-events-auto"
-                    state={hud}
-                    label={(key) => t(key)}
-                    onBuild={shelterUp}
-                    onSleep={sleep}
-                    onGoggles={goggles}
-                    nearShelter={Boolean(nearestShelter(hud, 3.5))}
-                  />
                   <Objectives state={hud} label={(key) => t(key)} />
                 </div>
 
-                <div className="flex flex-col items-end gap-2">
-                  <div className="panel-tight px-3 py-2 text-right">
-                    <p className="eyebrow">Carnet</p>
-                    <p className="text-sm font-semibold">
-                      {hud.observedSpecies.length} espèce{hud.observedSpecies.length > 1 ? "s" : ""}
+                <div className="flex flex-col items-end gap-1.5">
+                  <CompassBar heading={hud.player.heading} waypoints={waypoints} className="w-52 md:w-64" />
+                  {/* Un seul bandeau de chiffres, au lieu de trois cartes */}
+                  <div className="rounded-lg bg-canopy-950/40 px-2.5 py-1 text-right text-[0.6rem] leading-relaxed text-mist/60">
+                    <p className="tabular-nums">
+                      <span className="text-sky-300">🐾 {mewasFound(hud.mewas)}/{MEWA_COUNT}</span>
+                      <span className="mx-1.5 text-mist/25">·</span>🧵 {hud.threads}
+                      <span className="mx-1.5 text-mist/25">·</span>⭐ {hud.level}
                     </p>
-                    <p className="text-[0.65rem] text-mist/60">
-                      {hud.score} pts · niveau {hud.level}
-                    </p>
-                  </div>
-                  <div className="panel-tight px-3 py-2 text-right">
-                    <p className="eyebrow">{t("game.mewas")}</p>
-                    <p className="text-sm font-semibold tabular-nums text-sky-300">
-                      🐾 {mewasFound(hud.mewas)}/{MEWA_COUNT}
-                    </p>
-                    <p className="text-[0.65rem] text-mist/60">
-                      🧵 {hud.threads} · {hud.style} {t("game.style")}
+                    <p className="tabular-nums text-[0.55rem] text-mist/40">
+                      {hud.score} pts · {Math.round(hud.hunt.meat)} kg · {totalKills} bête
+                      {totalKills > 1 ? "s" : ""}
                     </p>
                   </div>
-                  <div className="panel-tight px-3 py-2 text-right">
-                    <p className="eyebrow">Tableau de chasse</p>
-                    <p className="text-sm font-semibold text-parchment">
-                      {Math.round(hud.hunt.meat)} kg de viande
-                    </p>
-                    <p className="text-[0.65rem] text-mist/60">
-                      {totalKills} bête{totalKills > 1 ? "s" : ""} · {hud.hunt.shots} coups tirés
-                    </p>
-                  </div>
-                  <CompassBar heading={hud.player.heading} waypoints={waypoints} className="w-56 md:w-72" />
                 </div>
               </div>
 
               {/* Barre d'armes */}
               <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 md:top-4">
-                <div className="flex items-center gap-1 rounded-full border border-mist/15 bg-canopy-950/70 px-1.5 py-1 backdrop-blur">
+                <div className="flex items-center gap-0.5 rounded-full border border-mist/10 bg-canopy-950/55 px-1 py-0.5 backdrop-blur-sm">
                   {WEAPONS.map((entry, index) => {
                     const active = entry.id === arsenal.current;
                     const ammo = weaponStateOf(arsenal, entry.id);
@@ -1215,8 +1207,8 @@ export default function MinkebeGame() {
                         onClick={() => equip(entry.id)}
                         className={`flex items-center gap-1 rounded-full px-2 py-1 text-[0.6rem] transition ${
                           active
-                            ? "bg-amber-glow/25 text-parchment"
-                            : "text-mist/60 hover:text-parchment"
+                            ? "bg-parchment/15 text-parchment"
+                            : "text-mist/55 hover:text-parchment"
                         }`}
                         aria-pressed={active}
                       >
@@ -1290,67 +1282,35 @@ export default function MinkebeGame() {
                   </button>
                 )}
                 {showHints && (
-                  <div className="pointer-events-none flex flex-wrap items-center justify-center gap-1.5 rounded-full bg-canopy-950/70 px-3 py-1.5 text-[0.62rem] text-mist/75 backdrop-blur">
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">ZQSD</kbd>
+                  // Six gestes, pas dix-huit. Le reste — boire, manger,
+                  // griller, le vestiaire — s'apprend par les boutons
+                  // contextuels, qui n'apparaissent que quand ils servent.
+                  <div className="pointer-events-none flex flex-wrap items-center justify-center gap-1.5 rounded-full bg-canopy-950/60 px-3 py-1 text-[0.6rem] text-mist/70 backdrop-blur-sm">
+                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">ZQSD</kbd>
                     <span>{t("game.hints.walk")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Maj</kbd>
-                    <span>{t("game.hints.run")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">C</kbd>
-                    <span>{t("game.hints.crouch")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Espace</kbd>
+                    <span className="text-mist/25">·</span>
+                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">Espace</kbd>
                     <span>{t("game.hints.jump")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Ctrl</kbd>
+                    <span className="text-mist/25">·</span>
+                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">Ctrl</kbd>
                     <span>{t("game.hints.block")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">B</kbd>
-                    <span>{t("game.hints.shelter")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">N</kbd>
-                    <span>{t("game.hints.sleep")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">I</kbd>
-                    <span>{t("game.hints.goggles")}</span>
-                    <span className="text-mist/30">·</span>
-                    <span>{t("game.hints.aim")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">clic</kbd>
+                    <span className="text-mist/25">·</span>
+                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">clic</kbd>
                     <span>{t("game.hints.fire")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">1-6</kbd>
-                    <span>{t("game.hints.weapons")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">R</kbd>
-                    <span>{t("game.hints.reload")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">F</kbd>
-                    <span>{t("game.hints.eat")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">E</kbd>
-                    <span>{t("game.hints.drink")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">G</kbd>
-                    <span>{t("game.hints.grill")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">⇧O</kbd>
-                    <span>{t("game.hints.dress")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">V</kbd>
-                    <span>{t("game.hints.view")}</span>
-                    <span className="text-mist/30">·</span>
-                    <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans text-parchment">Échap</kbd>
+                    <span className="text-mist/25">·</span>
+                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">B</kbd>
+                    <span>{t("game.hints.shelter")}</span>
+                    <span className="text-mist/25">·</span>
+                    <kbd className="rounded bg-canopy-800/80 px-1.5 py-0.5 font-sans text-parchment/90">Échap</kbd>
                     <span>{t("game.hints.pause")}</span>
                   </div>
                 )}
                 {ambient && (
-                  <p className="max-w-xl rounded-full bg-canopy-950/55 px-4 py-1.5 text-center text-[0.7rem] italic text-mist/70 backdrop-blur">
+                  <p className="max-w-xl rounded-full bg-canopy-950/50 px-4 py-1 text-center text-[0.68rem] italic text-mist/65 backdrop-blur-sm">
                     {ambient}
                   </p>
                 )}
-                <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+                <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1.5">
                   {nearWater && (
                     <button type="button" className="btn btn-primary !px-3 !py-1.5 !text-xs" onClick={drink}>
                       💧 {t("game.drink")} <kbd className="opacity-60">E</kbd>
@@ -1366,42 +1326,70 @@ export default function MinkebeGame() {
                       🔥 {t("game.grill")} <kbd className="opacity-50">G</kbd>
                     </button>
                   )}
+                  {/* Le reste en icônes : six boutons pleine largeur, c'était
+                      un ruban de formulaires en travers de la forêt. */}
                   <button
                     type="button"
-                    className="btn btn-ghost !px-3 !py-1.5 !text-xs"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => {
                       document.exitPointerLock?.();
                       setShowDressing(true);
                     }}
+                    aria-label={t("game.dress")}
+                    title={`${t("game.dress")} · ⇧O`}
                   >
-                    🪡 {t("game.dress")} · 🧵 {hud.threads}{" "}
-                    <kbd className="opacity-50">⇧O</kbd>
-                  </button>
-                  <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => setShowMap((v) => !v)}>
-                    🗺️ {t("game.map")} <kbd className="opacity-50">M</kbd>
+                    🪡
                   </button>
                   <button
                     type="button"
-                    className="btn btn-ghost !px-3 !py-1.5 !text-xs"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    onClick={() => setShowMap((v) => !v)}
+                    aria-label={t("game.map")}
+                    title={`${t("game.map")} · M`}
+                  >
+                    🗺️
+                  </button>
+                  <button
+                    type="button"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => setView((v) => (v === "premier" ? "troisieme" : "premier"))}
                     aria-pressed={view === "troisieme"}
+                    aria-label={view === "troisieme" ? t("game.viewShoulder") : t("game.viewFirst")}
+                    title={`${t("game.hints.view")} · V`}
                   >
-                    {view === "troisieme" ? `🎥 ${t("game.viewShoulder")}` : `👁️ ${t("game.viewFirst")}`}{" "}
-                    <kbd className="opacity-50">V</kbd>
-                  </button>
-                  <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => void saveGame()}>
-                    💾 {t("game.save")}
-                  </button>
-                  <button type="button" className="btn btn-ghost !px-3 !py-1.5 !text-xs" onClick={() => setPhase("pause")}>
-                    ⏸️ {t("game.pause")}
+                    {view === "troisieme" ? "🎥" : "👁️"}
                   </button>
                   <button
                     type="button"
-                    className={`btn !px-3 !py-1.5 !text-xs ${voiceOn ? "btn-primary" : "btn-ghost"}`}
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    onClick={() => void saveGame()}
+                    aria-label={t("game.save")}
+                    title={t("game.save")}
+                  >
+                    💾
+                  </button>
+                  <button
+                    type="button"
+                    className={`grid h-8 w-8 place-items-center rounded-full border text-xs backdrop-blur-sm transition ${
+                      voiceOn
+                        ? "border-amber-glow/60 bg-amber-glow/25 text-parchment"
+                        : "border-mist/15 bg-canopy-950/55 text-parchment/80 hover:bg-canopy-800/80"
+                    }`}
                     onClick={() => setVoiceOn((v) => !v)}
                     aria-pressed={voiceOn}
+                    aria-label={t("game.voice")}
+                    title={t("game.voice")}
                   >
-                    🔊 {t("game.voice")}
+                    🔊
+                  </button>
+                  <button
+                    type="button"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-xs text-parchment backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    onClick={() => setPhase("pause")}
+                    aria-label={t("game.pause")}
+                    title={`${t("game.pause")} · Échap`}
+                  >
+                    ⏸
                   </button>
                 </div>
               </div>
@@ -1853,61 +1841,48 @@ function Objectives({ state, label }: { state: GameState; label: (key: Dictionar
   const status = levelStatus(state);
   const index = state.progress.levelIndex;
 
+  // Un seul filet de texte, sans fond : le joueur doit pouvoir le lire d'un
+  // coup d'œil sans que l'objectif lui mange un quart de l'écran. Le détail
+  // (brief, compteurs) reste accessible en pause.
   if (!status.level) {
     return (
-      <div className="panel-tight max-w-[16rem] px-3 py-2">
-        <p className="eyebrow">{label("game.expedition")}</p>
-        <p className="text-sm font-semibold text-parchment">{label("game.expeditionDone")}</p>
-        <p className="text-[0.65rem] text-mist/60">
-          {state.progress.completed.length} / {LEVELS.length}
-        </p>
-      </div>
+      <p className="max-w-[15.5rem] rounded-full bg-canopy-950/45 px-2.5 py-1 text-[0.62rem] text-mist/70 backdrop-blur-sm">
+        {label("game.expeditionDone")} · {state.progress.completed.length}/{LEVELS.length}
+      </p>
     );
   }
 
   return (
-    <div className="panel-tight max-w-[16rem] px-3 py-2">
-      <p className="eyebrow">
-        {label("game.expedition")} · {index + 1}/{LEVELS.length}
-      </p>
-      <p className="display text-sm leading-tight text-parchment">
-        {label(status.level.title as DictionaryKey)}
-      </p>
-      <p className="mb-1 text-[0.62rem] leading-snug text-mist/50">
-        {label(status.level.brief as DictionaryKey)}
-      </p>
-      <ul className="space-y-0.5">
-        {status.objectives.map((entry) => (
-          <li
-            key={entry.objective.id}
-            className={`flex items-baseline gap-1.5 text-[0.68rem] ${
-              entry.done ? "text-parchment" : "text-mist/70"
-            }`}
-          >
-            <span className={entry.done ? "text-amber-glow" : "text-mist/40"}>{entry.done ? "✓" : "·"}</span>
-            <span className="flex-1 leading-snug">{label(entry.label as DictionaryKey)}</span>
-            <span className="tabular-nums text-[0.62rem] text-mist/50">
-              {entry.current}/{entry.target}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <div className="max-w-[15.5rem] rounded-full bg-canopy-950/45 px-2.5 py-1 text-[0.62rem] leading-tight text-mist/70 backdrop-blur-sm">
+      <span className="tabular-nums text-mist/45">
+        {index + 1}/{LEVELS.length}
+      </span>{" "}
+      <span className="text-parchment">{label(status.level.title as DictionaryKey)}</span>
+      <span className="mx-1 text-mist/30">·</span>
+      {status.objectives.map((entry) => (
+        <span key={entry.objective.id} className={entry.done ? "text-moss-300" : ""}>
+          {entry.done ? "✓" : "○"}{" "}
+          <span className="tabular-nums">
+            {entry.current}/{entry.target}
+          </span>
+          {entry !== status.objectives[status.objectives.length - 1] && (
+            <span className="mx-1 text-mist/25">·</span>
+          )}
+        </span>
+      ))}
     </div>
   );
 }
 
-/**
- * Les quatre jauges de survie.
- *
- * Elles sont toujours à l'écran : c'est le mode de jeu, pas un panneau
- * optionnel. Sous 20 %, la barre clignote doucement — assez pour alerter,
- * jamais assez pour distraire de la forêt.
- */
 function Vitals({
   vitals,
+  xp,
+  level,
   label,
 }: {
   vitals: GameState["vitals"];
+  xp: number;
+  level: number;
   label: (key: DictionaryKey) => string;
 }) {
   const bars = [
@@ -1916,25 +1891,25 @@ function Vitals({
     { icon: "💧", key: "game.thirst", value: vitals.hydration, colour: "bg-sky-400" },
     { icon: "⚡", key: "game.stamina", value: vitals.stamina, colour: "bg-moss-300" },
   ] as const;
+  const progress = levelProgress(xp);
   return (
-    <div className="panel-tight w-44 space-y-1.5 px-3 py-2">
+    <div className="space-y-1 px-3 py-2">
       {bars.map((bar) => {
         const value = Math.max(0, Math.min(100, bar.value));
         const low = value < 20;
         return (
-          <div key={bar.key}>
-            <div className="flex justify-between text-[0.58rem] uppercase tracking-wider text-mist/55">
-              <span>
-                <span aria-hidden className="mr-1">
-                  {bar.icon}
-                </span>
-                {label(bar.key as DictionaryKey)}
-              </span>
-              <span className={`tabular-nums ${low ? "text-laterite-400" : ""}`}>
-                {Math.round(value)}
-              </span>
-            </div>
-            <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-canopy-700">
+          <div key={bar.key} className="flex items-center gap-1.5">
+            <span aria-hidden className="w-3 text-center text-[0.6rem] leading-none">
+              {bar.icon}
+            </span>
+            <div
+              className="h-[3px] flex-1 overflow-hidden rounded-full bg-canopy-800"
+              role="meter"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(value)}
+              aria-label={label(bar.key as DictionaryKey)}
+            >
               <div
                 className={`h-full rounded-full ${bar.colour} transition-[width] duration-300 ${
                   low ? "animate-pulse" : ""
@@ -1942,61 +1917,45 @@ function Vitals({
                 style={{ width: `${value}%` }}
               />
             </div>
+            <span
+              className={`w-6 text-right text-[0.55rem] tabular-nums ${
+                low ? "text-laterite-400" : "text-mist/45"
+              }`}
+            >
+              {Math.round(value)}
+            </span>
           </div>
         );
       })}
-    </div>
-  );
-}
-
-/**
- * La barre de niveau.
- *
- * Cinquante niveaux, 2 500 XP pour le Prix de Survie : c'est la colonne
- * vertébrale du jeu. Elle reste sous les jauges de survie, parce que survivre
- * et progresser sont la même boucle — on ne monte pas en regardant la forêt,
- * on monte en la traversant.
- */
-function LevelBar({
-  xp,
-  level,
-  label,
-}: {
-  xp: number;
-  level: number;
-  label: (key: DictionaryKey) => string;
-}) {
-  const progress = levelProgress(xp);
-  const prize = progress.prize;
-  return (
-    <div className="panel-tight w-44 space-y-1 px-3 py-2">
-      <div className="flex items-baseline justify-between text-[0.58rem] uppercase tracking-wider text-mist/55">
-        <span>
-          {label("game.level")} <span className="tabular-nums text-parchment">{level}</span>
+      <div className="flex items-center gap-1.5 pt-0.5">
+        <span aria-hidden className="w-3 text-center text-[0.6rem] leading-none">
+          ⭐
         </span>
-        <span className="tabular-nums">{Math.round(xp)} XP</span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-canopy-700">
         <div
-          className={`h-full rounded-full ${prize ? "bg-sky-300" : "bg-moss-300"} transition-[width] duration-500`}
-          style={{ width: `${Math.round(progress.ratio * 100)}%` }}
-        />
+          className="h-[3px] flex-1 overflow-hidden rounded-full bg-canopy-800"
+          role="meter"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress.ratio * 100)}
+          aria-label={`${label("game.level")} ${level}`}
+        >
+          <div
+            className={`h-full rounded-full ${progress.prize ? "bg-sky-300" : "bg-moss-300"} transition-[width] duration-500`}
+            style={{ width: `${Math.round(progress.ratio * 100)}%` }}
+          />
+        </div>
+        <span className="w-6 text-right text-[0.55rem] tabular-nums text-mist/45">{level}</span>
       </div>
-      <p className="text-[0.55rem] leading-tight text-mist/45">
-        {prize
-          ? `${label("game.prizeWon")} · ${label("game.survivalPrize")}`
-          : `${progress.span - progress.into} XP ${label("game.nextLevel")} · ${label("game.survivalPrize")}`}
-      </p>
     </div>
   );
 }
 
 /**
- * Ce que l'on porte sur le dos.
+ * Le paquetage.
  *
- * Trois chiffres qui changent une partie : le bois (un abri coûte cinq fagots),
- * les fruits, et l'état de la garde. Ils n'ont pas besoin d'un panneau plein
- * écran — un regard suffit.
+ * Quatre chiffres et deux gestes, sur une seule ligne : le bois (un abri en
+ * coûte cinq), les fruits, les abris, la viande au sac — puis les boutons de
+ * l'abri et des lunettes. Sans cadre autour : c'est un état, pas un panneau.
  */
 function FieldKit({
   state,
@@ -2016,45 +1975,56 @@ function FieldKit({
   className?: string;
 }) {
   return (
-    <div className={`panel-tight w-44 space-y-1 px-3 py-2 text-[0.62rem] text-mist/70 ${className}`}>
-      <div className="flex items-center justify-between">
-        <span>🪵 {state.wood}</span>
-        <span>🍈 {state.fruits}</span>
-        <span>🏠 {state.shelters.length}</span>
-      </div>
-      <div className="flex gap-1">
+    <div className={`flex items-center gap-1 px-3 py-1.5 text-[0.6rem] text-mist/65 ${className}`}>
+      <span className="tabular-nums" title={label("game.wood")}>
+        🪵 {state.wood}
+      </span>
+      <span className="text-mist/20">·</span>
+      <span className="tabular-nums" title={label("game.fruit")}>
+        🍈 {state.fruits}
+      </span>
+      <span className="text-mist/20">·</span>
+      <span className="tabular-nums" title={label("game.shelter")}>
+        🏠 {state.shelters.length}
+      </span>
+      <span className="ml-auto flex items-center gap-1">
         <button
           type="button"
           onClick={onBuild}
-          className={`flex-1 rounded-full border px-1.5 py-1 text-[0.58rem] transition ${
+          className={`grid h-6 w-6 place-items-center rounded-full text-[0.62rem] transition ${
             state.wood >= SHELTER_WOOD
-              ? "border-amber-glow/50 text-parchment hover:bg-amber-glow/10"
-              : "border-mist/15 text-mist/40"
+              ? "bg-amber-glow/25 text-parchment hover:bg-amber-glow/40"
+              : "bg-canopy-800/60 text-mist/35"
           }`}
+          aria-label={label("game.shelterBuild")}
+          title={`${label("game.shelterBuild")} · B`}
         >
-          🏠 {label("game.shelterBuild")} <kbd className="opacity-50">B</kbd>
+          B
         </button>
+        {nearShelter && (
+          <button
+            type="button"
+            onClick={onSleep}
+            className="grid h-6 w-6 place-items-center rounded-full bg-moss-300/25 text-[0.62rem] text-parchment hover:bg-moss-300/40"
+            aria-label={label("game.sleep")}
+            title={`${label("game.sleep")} · N`}
+          >
+            N
+          </button>
+        )}
         <button
           type="button"
           onClick={onGoggles}
-          className={`rounded-full border px-1.5 py-1 text-[0.58rem] transition ${
-            state.goggles ? "border-sky-300/70 text-sky-200" : "border-mist/15 text-mist/50"
+          className={`grid h-6 w-6 place-items-center rounded-full text-[0.62rem] transition ${
+            state.goggles ? "bg-sky-300/30 text-sky-100" : "bg-canopy-800/60 text-mist/45"
           }`}
           aria-pressed={state.goggles}
-          title={label("game.goggles")}
+          aria-label={label("game.goggles")}
+          title={`${label("game.goggles")} · I`}
         >
-          🥽 <kbd className="opacity-50">I</kbd>
+          I
         </button>
-      </div>
-      {nearShelter && (
-        <button
-          type="button"
-          onClick={onSleep}
-          className="w-full rounded-full border border-moss-300/50 px-1.5 py-1 text-[0.58rem] text-parchment transition hover:bg-moss-300/10"
-        >
-          🌙 {label("game.sleep")} <kbd className="opacity-50">N</kbd>
-        </button>
-      )}
+      </span>
     </div>
   );
 }
