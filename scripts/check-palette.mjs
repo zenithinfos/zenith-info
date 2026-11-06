@@ -84,7 +84,12 @@ function grade(rgb, { sat = LEGACY ? 0.86 : 0.68, contrast = LEGACY ? 1.06 : 1.0
   const mx = Math.max(...out);
   const mn = Math.min(...out);
   const vivid = LEGACY ? 0 : smoothstep(0.02, 0.3, mx - mn);
-  const keep = Math.max(0, sat - (1 - sat) * 0.45 * vivid);
+  let keep = Math.max(0, sat - (1 - sat) * 0.45 * vivid);
+  // Même règle que le shader : le bleu dominant (le ciel) n'est pas désaturé.
+  if (!LEGACY) {
+    const blueness = Math.min(1, Math.max(0, (out[2] - Math.max(out[0], out[1])) * 8));
+    keep += (1 - keep) * blueness;
+  }
   return out.map((v) => luma + (v - luma) * keep);
 }
 

@@ -10,12 +10,14 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import type { Weather } from "@/game/realism";
 import {
   FOREST_PALETTE,
+  SKY_GRADIENT_EXPONENT,
   SCENE_CONFIG,
   TEXTURES,
   lightForDaylight,
   qualityBudget,
 } from "@/game/sceneConfig";
 import { WATER_BODIES, rainParams, waterDepthAt, waterLevelAt } from "@/game/water";
+import { canopySheets } from "@/game/canopy";
 import { DEFAULT_START, SPAWN_CLEARING, ZONES } from "@/game/levels";
 import { cameraClearance, configureCollision, stepOverAt } from "@/game/collision";
 import {
@@ -292,17 +294,25 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // avec la distance, elle ne commence pas net à 8 unités).
     scene.fog = new THREE.FogExp2(SCENE_CONFIG.fog.color, 0.0125);
 
-    // Ciel en dôme : bleu au zénith, mais lavé par la brume à l'horizon. Un
-    // fond uni laissait une bande de ciel claire entre les troncs, à hauteur
+    // Ciel en dôme : bleu au zénith, pâle à l'horizon, jamais uniforme. Un fond
+    // uni laissait une bande de ciel claire entre les troncs, à hauteur
     // d'homme — ce qui trahit immédiatement le décor.
+    //
+    // Le bleu ne doit pas commencer à 60° : sous une canopée, on n'aperçoit le
+    // ciel que par des trouées de 10 à 40°. La pente du dégradé est donc
+    // calculée pour que la trouée médiane — 20° au-dessus de l'horizon — soit
+    // déjà franchement bleue.
     const skyGeometry = new THREE.SphereGeometry(320, 24, 16);
     const skyMaterial = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
       uniforms: {
-        uTop: { value: new THREE.Color(SCENE_CONFIG.background) },
-        uHorizon: { value: new THREE.Color(SCENE_CONFIG.fog.color) },
+        uTop: { value: new THREE.Color(FOREST_PALETTE.skyDay) },
+        // L'horizon du ciel n'est **pas** la couleur de la brume : la brume est
+        // verte (elle vient des feuilles), l'air au-dessus de la canopée est
+        // bleu. Les avoir confondus faisait un ciel de marécage.
+        uHorizon: { value: new THREE.Color(FOREST_PALETTE.skyHaze) },
         uBottom: { value: new THREE.Color(FOREST_PALETTE.canopy) },
       },
       vertexShader: `
@@ -319,8 +329,10 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         varying float vHeight;
         void main() {
           float h = vHeight;
+          // Pente partagée avec scripts/check-sky.mjs : le bleu gagne vite
+          // en montant, parce qu'on ne voit le ciel que par des trouées.
           vec3 colour = h > 0.0
-            ? mix(uHorizon, uTop, pow(clamp(h, 0.0, 1.0), 0.65))
+            ? mix(uHorizon, uTop, pow(clamp(h, 0.0, 1.0), ${SKY_GRADIENT_EXPONENT.toFixed(2)}))
             : mix(uHorizon, uBottom, clamp(-h * 3.0, 0.0, 1.0));
           gl_FragColor = vec4(colour, 1.0);
         }
@@ -1141,10 +1153,18 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     while (pendingTiles.length > 0) buildPendingTile();
 
     // --- Plafond de canopée -------------------------------------------
-    // Grandes nappes suspendues au-dessus du joueur : elles bouchent le ciel
-    // et donnent ce vert « sous la tente » propre aux forêts de terre ferme.
+    // Grandes nappes suspendues au-dessus du joueur : elles ferment le ciel
+    // sans le boucher. Deux choses comptent ici, et elles ont été fausses :
+    //
+    //   · la **texture**. `canopy.png` est entièrement opaque — vérifié, alpha
+    //     255 partout — donc un `alphaTest` dessus ne découpe rien : le
+    //     plafond était un couvercle plein. C'est `foliage.png` qu'il faut,
+    //     trouée à 55 % ;
+    //   · la **pose**. Une grille régulière sans vides donne une dalle. Les
+    //     nappes sont posées par `canopySheets`, qui laisse des trouées —
+    //     voir `src/game/canopy.ts`.
     const ceilingGroup = new THREE.Group();
-    const ceilingMaterial = foliageMaterial(TEXTURES.canopy, {
+    const ceilingMaterial = foliageMaterial(TEXTURES.foliage, {
       // La canopée vue d'en bas est en contre-jour : plus sombre et plus froide
       // que le sous-bois, mais jamais émeraude.
       tint: 0xb59a86,
@@ -1152,30 +1172,18 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       alphaTest: 0.36,
     });
     const ceilingGeometry = new THREE.PlaneGeometry(1, 1);
-    const ceilingCount = isMobile || reduced ? 26 : 56;
-    const ceilingMesh = new THREE.InstancedMesh(ceilingGeometry, ceilingMaterial, ceilingCount);
+    const sheets = canopySheets({ mobile: isMobile || reduced });
+    const ceilingMesh = new THREE.InstancedMesh(ceilingGeometry, ceilingMaterial, sheets.length);
     ceilingMesh.frustumCulled = false;
-    for (let i = 0; i < ceilingCount; i++) {
-      const angle = random() * Math.PI * 2;
-      const distance = Math.sqrt(random()) * 105;
-      const x = Math.cos(angle) * distance;
-      const z = Math.sin(angle) * distance;
-      dummy.position.set(x, 24 + random() * 14, z);
-      dummy.rotation.set(
-        -Math.PI / 2 + (random() - 0.5) * 0.14,
-        random() * Math.PI,
-        0,
-        "YXZ",
-      );
-      dummy.scale.setScalar(44 + random() * 40);
+    sheets.forEach((sheet, index) => {
+      dummy.position.set(sheet.x, sheet.y, sheet.z);
+      dummy.rotation.set(-Math.PI / 2 + sheet.tilt, sheet.yaw, 0, "YXZ");
+      dummy.scale.setScalar(sheet.size);
       dummy.updateMatrix();
-      ceilingMesh.setMatrixAt(i, dummy.matrix);
+      ceilingMesh.setMatrixAt(index, dummy.matrix);
       tintColor.setRGB(0.62 + random() * 0.18, 0.72 + random() * 0.16, 0.55 + random() * 0.16);
-      ceilingMesh.setColorAt(i, tintColor);
-    }
-    ceilingMesh.instanceMatrix.needsUpdate = true;
-    if (ceilingMesh.instanceColor) ceilingMesh.instanceColor.needsUpdate = true;
-    ceilingMesh.receiveShadow = true;
+      ceilingMesh.setColorAt(index, tintColor);
+    });
     ceilingGroup.add(ceilingMesh);
     scene.add(ceilingGroup);
 
@@ -1878,10 +1886,22 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
             float chroma = max(colour.r, max(colour.g, colour.b)) - min(colour.r, min(colour.g, colour.b));
             float vivid = smoothstep(0.02, 0.30, chroma);
             float keep = uSat - (1.0 - uSat) * 0.45 * vivid;
+
+            // Le ciel n'est pas un vert de plus. Cette désaturation sauve trois
+            // cents mètres carrés de feuillage ; appliquée au ciel, elle en
+            // faisait un gris — et un ciel gris au-dessus d'une forêt verte, ce
+            // n'est pas une forêt, c'est un studio. On épargne donc le bleu :
+            // plus un pixel tire vers le bleu, moins on le désature. Un
+            // feuillage (vert, ocre, brun) n'a jamais de bleu dominant, il
+            // n'est donc pas concerné.
+            float blueness = clamp((colour.b - max(colour.r, colour.g)) * 8.0, 0.0, 1.0);
+            keep = keep + (1.0 - keep) * blueness;
             colour = mix(vec3(luma), colour, clamp(keep, 0.0, 1.0));
 
-            // Réchauffement des lumières, refroidissement des ombres.
-            colour += vec3(0.035, 0.018, -0.012) * smoothstep(0.45, 1.0, luma);
+            // Réchauffement des lumières, refroidissement des ombres. Le ciel
+            // échappe au réchauffement : c'est précisément lui qui doit rester
+            // bleu dans une image chaude.
+            colour += vec3(0.035, 0.018, -0.012) * smoothstep(0.45, 1.0, luma) * (1.0 - blueness);
             colour += vec3(-0.012, 0.0, 0.02) * (1.0 - smoothstep(0.0, 0.45, luma));
 
             // Contraste en S, très léger : le contraste ajoute de la saturation
@@ -2313,11 +2333,21 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         const budget = lightForDaylight(value, weatherFactor);
         fog.density = THREE.MathUtils.lerp(fog.density, budget.fogDensity, 0.08);
 
+        // Le dôme a **deux** couleurs, et elles ne viennent pas de la même
+        // chose : le zénith dit le soleil, l'horizon dit l'air. On les fait
+        // évoluer ensemble mais séparément de la brume du sol.
         const sky = new THREE.Color(
           value > 0.55 ? FOREST_PALETTE.skyDay : value > 0.15 ? FOREST_PALETTE.skyDusk : FOREST_PALETTE.skyNight,
         );
+        const skyHaze = new THREE.Color(
+          value > 0.55
+            ? FOREST_PALETTE.skyHaze
+            : value > 0.15
+              ? FOREST_PALETTE.skyHazeDusk
+              : FOREST_PALETTE.skyHazeNight,
+        );
         (skyMaterial.uniforms.uTop.value as THREE.Color).lerp(sky, 0.08);
-        (skyMaterial.uniforms.uHorizon.value as THREE.Color).lerp(fog.color, 0.5);
+        (skyMaterial.uniforms.uHorizon.value as THREE.Color).lerp(skyHaze, 0.08);
 
         sun.intensity = budget.sun;
         ambient.intensity = budget.ambient;

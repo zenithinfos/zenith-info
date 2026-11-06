@@ -14,6 +14,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "check:forest": "node scripts/check-forest.mjs",
+    "check:sky": "node scripts/check-sky.mjs",
+    "check:canopy": "node scripts/check-canopy.mjs",
     "check:hunt": "node scripts/check-hunt.mjs",
     "check:human": "node scripts/check-human.mjs",
     "check:mewas": "node scripts/check-mewas.mjs",
@@ -24,6 +26,7 @@
     "preview:water": "node scripts/preview-water.mjs --size 640x360 --ss 2 --out ./preview",
     "preview:faune": "node scripts/preview-animals.mjs --out ./preview/faune.png",
     "preview:perso": "node scripts/check-human.mjs --out ./preview/personnage.png",
+    "preview:ciel": "node scripts/check-sky.mjs --out ./preview/ciel.png && node scripts/check-canopy.mjs --out ./preview/ciel-canopee.png",
     "preview:scene": "node scripts/preview-scene.mjs --size 480x270 --out ./preview",
     "trailer": "node scripts/game-trailer.mjs",
     "trailer:still": "node scripts/game-trailer.mjs --still 240,420,600,780"

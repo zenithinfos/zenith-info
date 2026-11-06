@@ -44,14 +44,51 @@ export const FOREST_PALETTE = {
   earth: 0x6b4a2f,
   laterite: 0x9a4f2b,
   river: 0x1e3b3a,
-  skyDay: 0xa6bcc2,
-  skyDusk: 0xd98a56,
-  skyNight: 0x0a1420,
+  // Le ciel, mesuré à l'écran et non choisi sur un nuancier.
+  //
+  // La version grise — 0xa6bcc2 — n'était pas « un bleu pâle » : à l'exposition
+  // de la scène, la courbe d'affichage la saturait jusqu'au **blanc-gris
+  // #e5e9e4, 2 % de saturation**. Autrement dit, il n'y avait pas de ciel : il
+  // y avait un trou blanc entre les arbres. Ces valeurs-ci sortent de la chaîne
+  // inverse (dôme → exposition → ACES → sRGB → étalonnage) :
+  //
+  //   zénith  → #4684c5, teinte 211°, saturation 64 %
+  //   horizon → #b1d2e2, teinte 200°, saturation 22 %
+  //
+  // `scripts/check-sky.mjs` les remesure et échoue si le bleu se perd.
+  skyDay: 0x385888,
+  // L'horizon du ciel n'est pas la brume du sol : le premier est bleu, la
+  // seconde est verte. Les confondre donnait un ciel de marécage.
+  skyHaze: 0x7098c0,
+  // Au couchant, le zénith reste bleu et seule la bande d'horizon est orange.
+  // Un zénith rose donne un ciel de carte postale, pas un ciel tropical.
+  skyDusk: 0x2a3c5e,
+  skyHazeDusk: 0xd98a56,
+  skyNight: 0x070c14,
+  skyHazeNight: 0x121e2c,
+  // La brume du **sol** : verte, parce qu'elle vient des feuilles. Elle n'a rien
+  // à voir avec l'horizon du ciel, qui est bleu.
   fogDay: 0x6e7c72,
   fogNight: 0x0b1512,
+  // Couleur de l'éclairage par le ciel : pâle, parce que c'est une lumière qui
+  // a traversé toute l'atmosphère avant d'atteindre le sous-bois. Elle reste
+  // distincte du bleu du dôme : une lumière bleue franche repeint la forêt en
+  // bleu, ce qui n'arrive jamais sous une canopée.
+  skyFill: 0xa6bcc2,
   sun: 0xffe9c4,
   moon: 0x9fb4d0,
 } as const;
+
+/**
+ * Pente du dégradé du dôme : la hauteur relative du ciel est élevée à cette
+ * puissance avant le mélange horizon → zénith.
+ *
+ * Elle est ici, et non dans le shader, pour que `scripts/check-sky.mjs` mesure
+ * exactement ce que le dôme dessine. À 0,42, une trouée à 20° au-dessus de
+ * l'horizon est déjà au bleu du zénith à 62 % — c'est là qu'on regarde, sous
+ * une canopée, pas à la verticale.
+ */
+export const SKY_GRADIENT_EXPONENT = 0.42;
 
 export const SCENE_CONFIG: SceneConfig = {
   background: FOREST_PALETTE.skyDay,
@@ -59,7 +96,7 @@ export const SCENE_CONFIG: SceneConfig = {
   lighting: {
     ambient: { color: 0xffffff, intensity: 0.42 },
     sun: { color: FOREST_PALETTE.sun, intensity: 2.1, position: { x: 60, y: 110, z: 40 } },
-    hemisphere: { sky: 0xa6bcc2, ground: 0x2c3a24, intensity: 0.55 },
+    hemisphere: { sky: FOREST_PALETTE.skyFill, ground: 0x2c3a24, intensity: 0.55 },
     moon: { color: FOREST_PALETTE.moon, intensity: 0.35 },
   },
   ground: { size: 520, segments: 96, texture: "/textures/ground.jpg" },
