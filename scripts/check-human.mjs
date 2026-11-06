@@ -262,6 +262,115 @@ rig.group.traverse((child) => {
 check("aucun maillage retourné", inverted === 0, `${inverted} sur ${meshes}`);
 
 // ---------------------------------------------------------------------------
+console.log("\nLe corps n'est pas un aplat");
+// ---------------------------------------------------------------------------
+// Deux choses séparent un personnage de jeu d'un mannequin de plastique, et
+// aucune ne se voit sur une capture d'écran : la **variation de valeur** et
+// les **plis**. On les mesure ici, pièce par pièce, pour qu'une refonte de la
+// sculpture ne les efface pas en silence.
+{
+  let painted = 0;
+  let total = 0;
+  let spread = 0;
+  let darkest = 1;
+  let brightest = 0;
+
+  rig.group.traverse((child) => {
+    if (!child.isMesh) return;
+    // L'arme est posée dans la main : ce n'est pas le corps.
+    if (!child.userData.body) return;
+    total += 1;
+    const colours = child.geometry.getAttribute("color");
+    if (!colours) return;
+    painted += 1;
+    // Étendue de la patine sur la pièce : min et max de la valeur.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < colours.count; i += 1) {
+      const value = colours.getX(i) * 0.3 + colours.getY(i) * 0.55 + colours.getZ(i) * 0.15;
+      lo = Math.min(lo, value);
+      hi = Math.max(hi, value);
+    }
+    spread = Math.max(spread, hi - lo);
+    darkest = Math.min(darkest, lo);
+    brightest = Math.max(brightest, hi);
+
+  });
+
+  check("toutes les pièces du corps sont patinées", painted === total, `${painted} sur ${total}`);
+  check("la patine varie fortement sur une même pièce", spread > 0.15, `étendue max ${spread.toFixed(2)}`);
+  check("la patine descend sous 0,80", darkest < 0.8, `plus sombre ${darkest.toFixed(2)}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nLe tissu plisse, le reste non");
+// ---------------------------------------------------------------------------
+// Un tube lisse se lit comme un mannequin. Le remède est un déplacement des
+// sommets le long de la normale, à moyenne fréquence. On le mesure : chaque
+// sommet est comparé à la moyenne de ses six plus proches voisins. Sur une
+// peau tendue ou une sclère, l'écart reste sous le millimètre ; sur une
+// chemise plissée, il dépasse plusieurs millimètres.
+{
+  const CLOTH = new Set(["chemise", "chemise-ombre", "pantalon", "pantalon-ombre", "bottes", "caoutchouc", "sangle", "chapeau"]);
+  const SMOOTH = new Set(["peau", "sclere", "iris", "metal", "cheveux", "cuir"]);
+
+  // Écart médian d'un sommet à la moyenne de ses plus proches voisins.
+  const ripple = (geometry) => {
+    const position = geometry.getAttribute("position");
+    const points = [];
+    const step = Math.max(1, Math.floor(position.count / 400));
+    for (let i = 0; i < position.count; i += step) {
+      points.push([position.getX(i), position.getY(i), position.getZ(i)]);
+    }
+    if (points.length < 12) return 0;
+    const residuals = [];
+    for (let i = 0; i < points.length; i += 1) {
+      const nearest = [];
+      for (let j = 0; j < points.length; j += 1) {
+        if (i === j) continue;
+        const dx = points[i][0] - points[j][0];
+        const dy = points[i][1] - points[j][1];
+        const dz = points[i][2] - points[j][2];
+        nearest.push([dx * dx + dy * dy + dz * dz, j]);
+      }
+      nearest.sort((a, b) => a[0] - b[0]);
+      const k = Math.min(6, nearest.length);
+      let ax = 0;
+      let ay = 0;
+      let az = 0;
+      for (let t = 0; t < k; t += 1) {
+        const p = points[nearest[t][1]];
+        ax += p[0];
+        ay += p[1];
+        az += p[2];
+      }
+      ax /= k;
+      ay /= k;
+      az /= k;
+      residuals.push(Math.hypot(points[i][0] - ax, points[i][1] - ay, points[i][2] - az));
+    }
+    residuals.sort((a, b) => a - b);
+    return residuals[Math.floor(residuals.length / 2)] ?? 0;
+  };
+
+  const cloth = [];
+  const smooth = [];
+  rig.group.traverse((child) => {
+    if (!child.isMesh || !child.userData.body) return;
+    const name = child.material?.name ?? "";
+    if (CLOTH.has(name)) cloth.push([name, ripple(child.geometry)]);
+    else if (SMOOTH.has(name)) smooth.push([name, ripple(child.geometry)]);
+  });
+
+  const mean = (list) => list.reduce((sum, [, value]) => sum + value, 0) / Math.max(1, list.length);
+  const clothMean = mean(cloth);
+  const smoothMean = mean(smooth);
+  check("les vêtements portent des plis", cloth.length > 0 && clothMean > 0.004, `${(clothMean * 1000).toFixed(1)} mm sur ${cloth.length} pièces`);
+  check("la peau et les yeux restent lisses", smooth.length > 0 && smoothMean < 0.004, `${(smoothMean * 1000).toFixed(1)} mm sur ${smooth.length} pièces`);
+  check("le pli est plus marqué que la peau", clothMean > smoothMean, `tissu ${(clothMean * 1000).toFixed(1)} mm vs peau ${(smoothMean * 1000).toFixed(1)} mm`);
+}
+
+// ---------------------------------------------------------------------------
 // Rendu logiciel
 // ---------------------------------------------------------------------------
 const panels = [
@@ -343,6 +452,9 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
       child.material.color ??
       new THREE.Color(0.7, 0.7, 0.7)
     ).clone();
+    // La patine : une couleur par sommet, qui multiplie l'albédo. Sans elle
+    // l'aperçu montrerait un aplat que le jeu n'affiche plus.
+    const tints = geometry.attributes.color;
     const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
     const screen = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
     const normals = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
@@ -379,6 +491,12 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
         depth: (screen[0].z + screen[1].z + screen[2].z) / 3,
         near: screen.map((point) => 1 - point.z),
         colour,
+        tints: tints
+          ? [0, 1, 2].map((k) => {
+              const at = index ? index.getX(i + k) : i + k;
+              return [tints.getX(at), tints.getY(at), tints.getZ(at)];
+            })
+          : null,
         normals: normals.map((n) => n.clone()),
       });
     }
@@ -416,9 +534,19 @@ function renderPanel(offsetX, poseState, cameraPosition, target) {
         const len = Math.hypot(nx, ny, nz) || 1;
         const lambert = Math.abs((nx * light.x + ny * light.y + nz * light.z) / len);
         const s = 0.2 + 0.8 * Math.pow(lambert, 0.9);
-        buffer[i] = buffer[i] * 0.15 + triangle.colour.r * s * 0.85;
-        buffer[i + 1] = buffer[i + 1] * 0.15 + triangle.colour.g * s * 0.85;
-        buffer[i + 2] = buffer[i + 2] * 0.15 + triangle.colour.b * s * 0.85;
+        // Patine interpolée entre les trois sommets, comme le fait le GPU.
+        const tintR = triangle.tints
+          ? triangle.tints[0][0] * w0 + triangle.tints[1][0] * w1 + triangle.tints[2][0] * w2
+          : 1;
+        const tintG = triangle.tints
+          ? triangle.tints[0][1] * w0 + triangle.tints[1][1] * w1 + triangle.tints[2][1] * w2
+          : 1;
+        const tintB = triangle.tints
+          ? triangle.tints[0][2] * w0 + triangle.tints[1][2] * w1 + triangle.tints[2][2] * w2
+          : 1;
+        buffer[i] = buffer[i] * 0.15 + triangle.colour.r * tintR * s * 0.85;
+        buffer[i + 1] = buffer[i + 1] * 0.15 + triangle.colour.g * tintG * s * 0.85;
+        buffer[i + 2] = buffer[i + 2] * 0.15 + triangle.colour.b * tintB * s * 0.85;
       }
     }
   }

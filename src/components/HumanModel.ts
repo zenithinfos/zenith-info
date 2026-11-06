@@ -23,17 +23,25 @@ import { type WeaponId } from "@/game/hunting";
 import { HUMAN_HOLD } from "@/game/holds";
 import { createWeaponModel, disposeWeaponModel, type WeaponModel } from "./WeaponModels";
 
-export const HUMAN_HIPS_Y = 0.95;
-export const HUMAN_EYE_Y = 1.66;
+/**
+ * Proportions d'un homme de 1,76 m.
+ *
+ * Les hanches étaient à 95 cm : jambes trop courtes de trois centimètres,
+ * torse trop long d'autant. On ne le voit pas sur un portrait, on le voit
+ * immédiatement en jeu — c'est ce qui donne cette allure de pantin monté sur
+ * un bâton.
+ */
+export const HUMAN_HIPS_Y = 0.92;
+export const HUMAN_EYE_Y = 1.65;
 const SHOULDER_Y = 0.2; // dans l'espace de la poitrine
 // L'articulation de l'épaule doit tomber **dans** le torse, pas à côté. À
 // 0,172 m du centre, elle était déjà dehors : le bras flottait et la coiffe du
 // deltoïde faisait office de pont — c'est ce qui donnait des épaulettes.
-const SHOULDER_X = 0.146;
-const UPPER_ARM = 0.3;
-const FOREARM = 0.27;
-const THIGH = 0.44;
-const SHIN = 0.405;
+const SHOULDER_X = 0.142;
+const UPPER_ARM = 0.295;
+const FOREARM = 0.265;
+const THIGH = 0.43;
+const SHIN = 0.4;
 
 export type HumanMotion = "idle" | "walk" | "run" | "sneak" | "swim";
 
@@ -142,6 +150,272 @@ function mesh(
   created.castShadow = true;
   created.receiveShadow = true;
   return created;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Patine                                                                   */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Bruit de valeur déterministe, 3D.
+ *
+ * Pas de table, pas d'état : la même position donne toujours la même valeur,
+ * ce qui rend la patine reproductible d'un chargement à l'autre — et vérifiable
+ * par les contrôles.
+ */
+function hashNoise(x: number, y: number, z: number): number {
+  const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+
+/** Bruit lissé : interpolation trilineaire du bruit sur une grille. */
+function smoothNoise(x: number, y: number, z: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fy = y - iy;
+  const fz = z - iz;
+  const ease = (t: number) => t * t * (3 - 2 * t);
+  const ux = ease(fx);
+  const uy = ease(fy);
+  const uz = ease(fz);
+  const corner = (dx: number, dy: number, dz: number) => hashNoise(ix + dx, iy + dy, iz + dz);
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const x00 = lerp(corner(0, 0, 0), corner(1, 0, 0), ux);
+  const x10 = lerp(corner(0, 1, 0), corner(1, 1, 0), ux);
+  const x01 = lerp(corner(0, 0, 1), corner(1, 0, 1), ux);
+  const x11 = lerp(corner(0, 1, 1), corner(1, 1, 1), ux);
+  return lerp(lerp(x00, x10, uy), lerp(x01, x11, uy), uz);
+}
+
+/** Deux octaves : une trame large, une plus fine. */
+function noise2(x: number, y: number, z: number): number {
+  return smoothNoise(x, y, z) * 0.62 + smoothNoise(x * 2.7 + 11, y * 2.7 + 5, z * 2.7 + 3) * 0.38;
+}
+
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/** Rampe douce entre deux bornes, dans les deux sens. */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp01((x - edge0) / (edge1 - edge0 || 1e-6));
+  return t * t * (3 - 2 * t);
+}
+
+/** Bande de valeur autour d'une hauteur : sert aux plis de tissu. */
+function band(value: number, centre: number, width: number): number {
+  const d = (value - centre) / width;
+  return Math.exp(-d * d);
+}
+
+/** Familles de matières : la patine ne s'applique pas de la même façon. */
+export type PaintKind = "tissu" | "peau" | "cuir" | "metal" | "toile";
+
+/**
+ * Peint la patine sur une géométrie.
+ *
+ * La couleur par sommet **multiplie** l'albédo de la matière : c'est de
+ * l'occlusion, de la crasse et de l'usure, pas de la peinture. C'est ce qui
+ * distingue un vêtement d'un aplat de plastique, et c'est ce qui manquait le
+ * plus à trois mètres, à la distance où l'on voit vraiment le personnage.
+ */
+function paintGeometry(
+  geometry: THREE.BufferGeometry,
+  kind: PaintKind,
+  matrix: THREE.Matrix4,
+): void {
+  const position = geometry.getAttribute("position");
+  const colours = new Float32Array(position.count * 3).fill(1);
+  const point = new THREE.Vector3();
+  for (let i = 0; i < position.count; i += 1) {
+    point.fromBufferAttribute(position, i).applyMatrix4(matrix);
+    const [r, g, b] = PATINA(point.x, point.y, point.z, kind);
+    colours[i * 3] = r;
+    colours[i * 3 + 1] = g;
+    colours[i * 3 + 2] = b;
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colours, 3));
+}
+
+/**
+ * La patine, en coordonnées du monde au repos.
+ *
+ * Trois ingrédients, dans l'ordre où un vrai vêtement les accumule :
+ *
+ *   1. **la crasse du sol** — elle monte du bas : bottes, bas de pantalon,
+ *      genoux. C'est le repère qui dit « cet homme marche dans la forêt » ;
+ *   2. **les creux** — aisselles, pli du coude, derrière le genou, sous la
+ *      ceinture : là où le tissu s'entasse et où la lumière n'entre pas ;
+ *   3. **le grain** — une variation lente, jamais nulle, qui casse l'aplat.
+ *
+ * Le tout reste dans des proportions faibles : 0,62 au plus sombre sur du
+ * tissu trempé de boue, 0,86 pour un creux ordinaire. Une patine trop
+ * appuyée ne fait pas plus vrai, elle fait sale.
+ */
+function PATINA(x: number, y: number, z: number, kind: PaintKind): [number, number, number] {
+  const grain = noise2(x * 9.3, y * 9.3, z * 9.3);
+  const coarse = noise2(x * 2.1 + 4, y * 2.1, z * 2.1 + 7);
+
+  // --- 1. la crasse du sol
+  // Elle culmine aux pieds et s'éteint vers la taille. Le facteur vertical est
+  // propre à chaque matière : une botte en cuir ne se salit pas comme une
+  // chemise.
+  const ground = {
+    tissu: smoothstep(1.02, 0.06, y),
+    peau: smoothstep(0.95, 0.2, y) * 0.55,
+    cuir: 0.55 + 0.45 * smoothstep(0.6, 0.02, y),
+    metal: smoothstep(1.05, 0.3, y) * 0.7,
+    toile: smoothstep(1.35, 0.2, y),
+  }[kind];
+  const mud = ground * (0.35 + 0.65 * coarse);
+  // Un brun-gris, pas du noir : la boue sèche est terne.
+  let r = 1 - mud * 0.3;
+  let g = 1 - mud * 0.32;
+  let b = 1 - mud * 0.36;
+
+  // --- 2. les creux
+  // Les hauteurs sont celles du corps au repos, en mètres depuis le sol.
+  if (kind === "tissu" || kind === "toile") {
+    // Aisselle : deux taches sous les bras, à hauteur de poitrine.
+    const armpit = band(Math.abs(x), 0.19, 0.055) * band(y, 1.32, 0.16);
+    // Pli du coude et derrière le genou : là où le membre se replie.
+    const elbow = band(y, 1.1, 0.07) * band(Math.abs(x), 0.2, 0.09);
+    const knee = band(y, 0.52, 0.09) * band(Math.abs(x), 0.1, 0.12);
+    // Sous la ceinture et sous les bras, l'ombre propre du vêtement.
+    const waist = band(y, 0.98, 0.05);
+    const hollow = Math.min(1, armpit * 0.9 + elbow * 0.55 + knee * 0.6 + waist * 0.7);
+    r *= 1 - hollow * 0.16;
+    g *= 1 - hollow * 0.15;
+    b *= 1 - hollow * 0.14;
+
+    // Défraîchi : le soleil, les lavages et les frottements ont délavé de
+    // larges plaques. C'est la variation que l'œil lit à trois mètres, bien
+    // avant le détail des coutures ; sans elle, la chemise est un aplat de
+    // couleur choisie dans un nuancier.
+    const fade = smoothstep(0.5, 0.92, noise2(x * 0.95 + 11, y * 0.95 + 3, z * 0.95)) * 0.11;
+    r += fade * 0.9;
+    g += fade;
+    b += fade * 0.7;
+
+    // La sueur : plus sombre et plus froide à l'aisselle, au col et aux reins,
+    // là où le tissu colle à la peau et sèche mal.
+    const collar = band(y, 1.5, 0.075) * 0.75;
+    const smallOfBack = band(y, 1.02, 0.09) * smoothstep(-0.2, 0.08, z) * 0.65;
+    const sweat = Math.min(1, armpit * 1.15 + collar + smallOfBack);
+    r *= 1 - sweat * 0.11;
+    g *= 1 - sweat * 0.1;
+    b *= 1 - sweat * 0.14;
+  } else if (kind === "peau") {
+    // Le creux du cou sous la mâchoire, le pli des paupières, les paumes.
+    const neckShadow = band(y, 1.55, 0.05) * smoothstep(0.55, 0.25, z);
+    const shade = neckShadow * 0.5;
+    r *= 1 - shade * 0.18;
+    g *= 1 - shade * 0.2;
+    b *= 1 - shade * 0.2;
+  }
+
+  // --- 3. le grain
+  // Très faible, mais jamais nul : c'est lui qui empêche une surface
+  // d'apparaître comme une couleur choisie dans un nuancier.
+  const tone = (grain - 0.5) * (kind === "metal" ? 0.16 : 0.11);
+  r *= 1 + tone;
+  g *= 1 + tone * 0.95;
+  b *= 1 + tone * 0.9;
+
+  // --- usure : les saillies s'éclaircissent, le tissu s'y détend
+  if (kind === "tissu" || kind === "cuir" || kind === "toile") {
+    const wear = smoothstep(0.55, 1.0, coarse) * smoothstep(1.3, 0.3, y) * 0.12;
+    r += wear;
+    g += wear;
+    b += wear;
+  }
+
+  return [clamp01(r), clamp01(g), clamp01(b)];
+}
+
+type CreasePart = "torse" | "bras" | "avant-bras" | "cuisse" | "tibia";
+
+/**
+ * Plis de tissu : une déformation de surface, pas une texture.
+ *
+ * Un vêtement n'est jamais lisse. Il s'entasse au pli du coude, se creuse
+ * derrière le genou, se tend sur la cuisse et se relâche à la taille. Ces
+ * plis font plus pour l'impression de réalité qu'un motif de couture : ce
+ * sont eux qui accrochent la lumière et qui cassent la silhouette en tuyau.
+ *
+ * On travaille en coordonnées du monde au repos, comme la patine, et on ne
+ * déplace que le rayon : la surface gondole, le membre ne se raccourcit pas.
+ * L'amplitude reste sous le centimètre — au-delà, le vêtement devient une
+ * loque.
+ */
+function creaseAt(x: number, y: number, z: number, part: CreasePart): number {
+  // Trame large, pour l'ondulation générale du tissu, et trame serrée pour le
+  // grain des plis. Deux fréquences : une seule donnerait des vagues.
+  const broad = noise2(x * 5.5 + 3, y * 5.5, z * 5.5 + 9) - 0.5;
+  const fine = noise2(x * 17 + 1, y * 17 + 7, z * 17) - 0.5;
+  const wave = broad * 0.75 + fine * 0.45;
+
+  const fold = (centre: number, width: number) => Math.exp(-(((y - centre) / width) ** 2));
+
+  switch (part) {
+    case "torse":
+      // Le drapé se concentre là où le tissu est libre : à la taille, sous la
+      // ceinture, et dans le creux des reins. Sur la poitrine, la chemise est
+      // tendue — presque rien.
+      return wave * (0.0022 + fold(1.08, 0.09) * 0.0032 + fold(1.34, 0.1) * 0.0016);
+    case "bras":
+      // Pli du coude : le tissu s'entasse juste au-dessus.
+      return wave * (0.0016 + fold(1.12, 0.05) * 0.004);
+    case "avant-bras":
+      // La manche est roulée : bourrelet au bord, plis serrés en dessous.
+      return wave * (0.0014 + fold(1.0, 0.035) * 0.0045);
+    case "cuisse":
+      // Tension sur le devant, plis sous l'aine et derrière le genou.
+      return wave * (0.0018 + fold(0.78, 0.08) * 0.0028 + fold(0.5, 0.05) * 0.0026);
+    case "tibia":
+      // Le pantalon casse sur la chaussure : plis horizontaux serrés.
+      return wave * (0.0016 + fold(0.22, 0.05) * 0.0038 + fold(0.34, 0.04) * 0.0022);
+    default:
+      return wave * 0.002;
+  }
+}
+
+/**
+ * Applique les plis à une géométrie de vêtement.
+ *
+ * La déformation se fait le long de la normale : c'est la seule direction qui
+ * gondole la surface sans la déchirer. Les normales sont recalculées ensuite —
+ * sans quoi les plis existeraient dans la géométrie mais pas dans la lumière,
+ * et ne se verraient pas.
+ */
+function creaseGeometry(
+  geometry: THREE.BufferGeometry,
+  part: CreasePart,
+  matrix: THREE.Matrix4,
+): void {
+  const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const normal = geometry.getAttribute("normal") as THREE.BufferAttribute;
+  const point = new THREE.Vector3();
+  const direction = new THREE.Vector3();
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrix);
+
+  for (let i = 0; i < position.count; i += 1) {
+    point.fromBufferAttribute(position, i).applyMatrix4(matrix);
+    const amount = creaseAt(point.x, point.y, point.z, part);
+    if (amount === 0) continue;
+    direction.fromBufferAttribute(normal, i).applyMatrix3(normalMatrix);
+    // Le déplacement est en repère local : on reprojette la normale du monde
+    // dans celui de la pièce, sinon un bras tourné s'écrase sur lui-même.
+    direction.transformDirection(new THREE.Matrix4().copy(matrix).invert());
+    position.setXYZ(
+      i,
+      position.getX(i) + direction.x * amount,
+      position.getY(i) + direction.y * amount,
+      position.getZ(i) + direction.z * amount,
+    );
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
 }
 
 type Ring = {
@@ -397,12 +671,12 @@ function sculptedHead(
   // air de masque. On remonte la mâchoire, on élargit le bas du visage et on
   // donne au crâne les trois cinquièmes de la hauteur qu'il mérite.
   const rings: Ring[] = [
-    { y: -0.096, rx: 0.032, rz: 0.034, z: -0.019 },
-    { y: -0.09, rx: 0.039, rz: 0.042, z: -0.018 },
-    { y: -0.08, rx: 0.046, rz: 0.051, z: -0.014 },
-    { y: -0.068, rx: 0.051, rz: 0.057, z: -0.009 },
-    { y: -0.052, rx: 0.056, rz: 0.064, z: -0.004 },
-    { y: -0.034, rx: 0.062, rz: 0.072, z: 0.001 },
+    { y: -0.096, rx: 0.028, rz: 0.031, z: -0.02 },
+    { y: -0.09, rx: 0.035, rz: 0.039, z: -0.018 },
+    { y: -0.08, rx: 0.042, rz: 0.048, z: -0.014 },
+    { y: -0.068, rx: 0.048, rz: 0.055, z: -0.009 },
+    { y: -0.052, rx: 0.054, rz: 0.063, z: -0.004 },
+    { y: -0.034, rx: 0.06, rz: 0.071, z: 0.001 },
     { y: -0.016, rx: 0.069, rz: 0.08, z: 0.005 },
     { y: 0.0, rx: 0.0725, rz: 0.084, z: 0.008 },
     { y: 0.018, rx: 0.0755, rz: 0.088, z: 0.011 },
@@ -460,7 +734,7 @@ function sculptedHead(
       // Tempe : le creux latéral, au-dessus de la pommette.
       push(side * 0.062, 0.042, -0.02, 0.02, -0.0045);
       // Orbite : le globe s'enfonce, l'arcade ressort juste au-dessus.
-      push(side * 0.03, 0.015, -0.068, 0.019, -0.0058);
+      push(side * 0.03, 0.015, -0.068, 0.021, -0.0078);
       push(side * 0.03, 0.036, -0.064, 0.015, 0.0032);
       // Aile du nez, large et plate : un nez étroit sous cette peau, ce
       // serait le nez d'un autre visage.
@@ -591,6 +865,29 @@ export function createHumanRig(): HumanRig {
     irisMaterial,
   ];
 
+  // Nommer les matières : sans nom, un contrôle qui parle du personnage doit
+  // dire « la matière 2 » au lieu de « la chemise ». Les noms survivent au
+  // clonage des matières fait pour les vêtements.
+  [
+    "peau",
+    "peau-creux",
+    "chemise",
+    "chemise-ombre",
+    "pantalon",
+    "pantalon-ombre",
+    "bottes",
+    "caoutchouc",
+    "sangle",
+    "sac",
+    "chapeau",
+    "cheveux",
+    "metal",
+    "sclere",
+    "iris",
+  ].forEach((name, index) => {
+    materials[index].name = name;
+  });
+
   const group = new THREE.Group();
   group.name = "joueur";
   group.rotation.order = "YXZ";
@@ -655,6 +952,16 @@ export function createHumanRig(): HumanRig {
     hips.add(pouch);
   }
 
+  // Fesses. Sans elles, le bassin se termine par un plan incliné et le
+  // personnage, vu de trois quarts, a un dos plat jusqu'aux genoux. Deux
+  // masses basses, à l'arrière, donnent son assise au pantalon.
+  for (const side of [-1, 1]) {
+    const seat = ellipsoid(0.062, 0.058, 0.044, trousers, collect);
+    seat.position.set(side * 0.058, -0.055, 0.062);
+    seat.rotation.z = side * 0.12;
+    hips.add(seat);
+  }
+
   const spine = new THREE.Group();
   spine.position.y = 0.09;
   hips.add(spine);
@@ -682,11 +989,15 @@ export function createHumanRig(): HumanRig {
       { y: 0.02, rx: 0.132, rz: 0.095, z: -0.002 },
       { y: 0.1, rx: 0.144, rz: 0.102, z: -0.004 },
       { y: 0.18, rx: 0.152, rz: 0.107, z: -0.004 },
-      { y: 0.25, rx: 0.158, rz: 0.109, z: -0.002 },
-      { y: 0.31, rx: 0.152, rz: 0.104 },
-      { y: 0.37, rx: 0.132, rz: 0.095 },
-      { y: 0.42, rx: 0.098, rz: 0.08 },
-      { y: 0.45, rx: 0.066, rz: 0.064 },
+      { y: 0.25, rx: 0.146, rz: 0.106, z: -0.002 },
+      // Le haut du torse ne doit pas s'évader : c'est un piège de section
+      // (un trapèze est plus étroit qu'une cage thoracique), et un torse qui
+      // s'élargit jusqu'aux épaules fait une carrure de nageur — ou une
+      // cloche. L'épaule se forme avec le deltoïde, pas avec le tronc.
+      { y: 0.31, rx: 0.138, rz: 0.1 },
+      { y: 0.37, rx: 0.118, rz: 0.09 },
+      { y: 0.42, rx: 0.082, rz: 0.072 },
+      { y: 0.45, rx: 0.055, rz: 0.058 },
     ],
     shirt,
     collect,
@@ -718,15 +1029,23 @@ export function createHumanRig(): HumanRig {
   // Gilet de terrain : deux poches plates à rabat, deux sangles, un poste
   // radio avec son antenne — les détails qu'on voit sur un homme de dos.
   for (const side of [-1, 1]) {
-    const pocket = mesh(new THREE.BoxGeometry(0.052, 0.05, 0.009), shirtDark, collect);
-    pocket.position.set(side * 0.05, 0.145, -0.1035);
-    pocket.rotation.set(0.06, side * -0.42, 0);
-    spine.add(pocket);
+    // Poche et rabat dans **un même groupe orienté**. Avant, les deux boîtes
+    // étaient tournées séparément de 0,42 rad : le rabat, mince et clair,
+    // n'affleurait la chemise que par un coin et l'on voyait deux triangles
+    // beiges en travers de la poitrine. Dans un groupe, ils restent parallèles
+    // et la poche se lit comme une poche.
+    const pocketGroup = new THREE.Group();
+    pocketGroup.position.set(side * 0.052, 0.15, -0.101);
+    pocketGroup.rotation.set(0.06, side * -0.34, 0);
+    spine.add(pocketGroup);
 
-    const flap = mesh(new THREE.BoxGeometry(0.054, 0.011, 0.012), webbing, collect);
-    flap.position.set(side * 0.05, 0.168, -0.1035);
-    flap.rotation.set(0.06, side * -0.42, 0);
-    spine.add(flap);
+    const pocket = mesh(new THREE.BoxGeometry(0.05, 0.052, 0.016), shirtDark, collect);
+    pocket.position.z = -0.004;
+    pocketGroup.add(pocket);
+
+    const flap = mesh(new THREE.BoxGeometry(0.054, 0.012, 0.02), webbing, collect);
+    flap.position.set(0, 0.026, -0.005);
+    pocketGroup.add(flap);
 
     // Sangle d'épaule du sac : elle passe sur le haut de l'épaule, pas sur
     // le devant de la chemise. Deux bandes verticales sur la poitrine
@@ -907,10 +1226,10 @@ export function createHumanRig(): HumanRig {
   // nulle part dans le maillage du visage.
   const neck = loft(
     [
-      { y: -0.02, rx: 0.057, rz: 0.06, z: 0.006 },
-      { y: 0.03, rx: 0.051, rz: 0.053, z: 0.012 },
-      { y: 0.07, rx: 0.045, rz: 0.047, z: 0.017 },
-      { y: 0.1, rx: 0.042, rz: 0.044, z: 0.02 },
+      { y: -0.02, rx: 0.062, rz: 0.064, z: 0.006 },
+      { y: 0.03, rx: 0.056, rz: 0.058, z: 0.011 },
+      { y: 0.07, rx: 0.05, rz: 0.052, z: 0.015 },
+      { y: 0.1, rx: 0.047, rz: 0.049, z: 0.018 },
     ],
     skin,
     collect,
@@ -921,6 +1240,13 @@ export function createHumanRig(): HumanRig {
   const head = new THREE.Group();
   head.position.y = 0.1;
   neckJoint.add(head);
+  // Une tête d'homme fait un septième et demi de sa taille, soit 23 cm. Le
+  // crâne sculpté mesure 22,4 cm : on le porte à l'échelle. C'est le rapport
+  // tête/épaules qui fait lire un adulte plutôt qu'un mannequin — une tête
+  // trop petite est le défaut le plus fréquent des personnages procéduraux,
+  // et celui qui les fait paraître longs et étroits sans qu'on sache dire
+  // pourquoi.
+  head.scale.setScalar(1.06);
 
   // --- Tête -------------------------------------------------------------
   // Une seule surface sculptée (voir `sculptedHead`) : proportions du crâne,
@@ -944,24 +1270,28 @@ export function createHumanRig(): HumanRig {
     // et les paupières en couvrent le tiers supérieur et le sixième inférieur.
     // Un globe trop gros et trop sorti donne ce regard fixe de grenouille —
     // c'est ce qu'on obtenait en cherchant à « voir les yeux ».
-    const eyeball = ellipsoid(0.0092, 0.0086, 0.0084, sclera, collect);
-    eyeball.position.set(side * 0.0298, socketY, socketZ + 0.0052);
+    // Un œil humain mesure 24 mm de diamètre : 12 mm de rayon. Le globe était
+    // à 9 mm, et l'iris à 6 — à l'écran, deux têtes d'épingle. On repasse aux
+    // dimensions réelles, ce qui est aussi le seul moyen d'avoir un regard
+    // lisible à trois mètres.
+    const eyeball = ellipsoid(0.0118, 0.0112, 0.0104, sclera, collect);
+    eyeball.position.set(side * 0.0298, socketY, socketZ + 0.0028);
     head.add(eyeball);
 
     // L'iris occupe presque toute la fente palpébrale : c'est ce qui
     // distingue un regard d'une bille. On le pose juste à la surface du globe.
-    const iris = ellipsoid(0.006, 0.0062, 0.003, irisMaterial, collect);
-    iris.position.set(side * 0.0299, socketY - 0.0001, socketZ - 0.0019);
+    const iris = ellipsoid(0.0068, 0.007, 0.0034, irisMaterial, collect);
+    iris.position.set(side * 0.0299, socketY - 0.0001, socketZ - 0.0066);
     head.add(iris);
 
-    const pupil = ellipsoid(0.0026, 0.0027, 0.0016, hair, collect);
-    pupil.position.set(side * 0.0299, socketY - 0.0002, socketZ - 0.0034);
+    const pupil = ellipsoid(0.0032, 0.0033, 0.0018, hair, collect);
+    pupil.position.set(side * 0.0299, socketY - 0.0002, socketZ - 0.008);
     head.add(pupil);
 
     // Un point de lumière sur le globe. Sans lui, l'œil est mat et le visage
     // paraît absent, même bien modélisé.
-    const glint = ellipsoid(0.0009, 0.0009, 0.0007, sclera, collect);
-    glint.position.set(side * 0.0314, socketY + 0.0024, socketZ - 0.0036);
+    const glint = ellipsoid(0.0012, 0.0012, 0.0008, sclera, collect);
+    glint.position.set(side * 0.0322, socketY + 0.003, socketZ - 0.0076);
     head.add(glint);
 
     // Paupières : deux voiles de peau qui coupent le globe. C'est ce qui fait
@@ -981,31 +1311,31 @@ export function createHumanRig(): HumanRig {
     // Le bord haut tombe juste au-dessus du centre du globe, le bord bas un
     // peu plus bas : la fente fait quatre millimètres de haut pour un œil de
     // dix-sept — l'ouverture d'un regard au repos.
-    const upperLid = lidShell(0.0112, 0, Math.PI * 0.44);
-    upperLid.position.set(side * 0.0298, socketY, socketZ + 0.0052);
+    const upperLid = lidShell(0.0136, 0, Math.PI * 0.44);
+    upperLid.position.set(side * 0.0298, socketY, socketZ + 0.0028);
     upperLid.rotation.z = side * -0.06;
     head.add(upperLid);
 
-    const lowerLid = lidShell(0.0109, Math.PI * 0.62, Math.PI * 0.38);
-    lowerLid.position.set(side * 0.0298, socketY - 0.0006, socketZ + 0.0052);
+    const lowerLid = lidShell(0.0132, Math.PI * 0.62, Math.PI * 0.38);
+    lowerLid.position.set(side * 0.0298, socketY - 0.0006, socketZ + 0.0028);
     head.add(lowerLid);
 
     // Pli de la paupière : une ligne sombre, pas un volume.
     const lidCrease = ellipsoid(0.0112, 0.0014, 0.0034, skinShade, collect);
-    lidCrease.position.set(side * 0.0298, socketY + 0.0072, socketZ + 0.0014);
+    lidCrease.position.set(side * 0.0298, socketY + 0.0078, socketZ - 0.0002);
     lidCrease.rotation.z = side * -0.16;
     head.add(lidCrease);
 
     // Sourcil : un arc de poils, fin, posé sur l'arcade.
     // Sourcil : deux segments plutôt qu'une barre — l'arcade a une queue
     // fine et une tête plus fournie. Un seul fuseau fait un trait de crayon.
-    const browHead = ellipsoid(0.0125, 0.0032, 0.0046, hair, collect);
-    browHead.position.set(side * 0.0228, 0.0448, -0.0682);
+    const browHead = ellipsoid(0.0135, 0.0042, 0.005, hair, collect);
+    browHead.position.set(side * 0.0245, 0.0462, -0.0692);
     browHead.rotation.z = side * -0.12;
     head.add(browHead);
-    const browTail = ellipsoid(0.0098, 0.0022, 0.0038, hair, collect);
-    browTail.position.set(side * 0.0418, 0.0472, -0.0652);
-    browTail.rotation.z = side * -0.3;
+    const browTail = ellipsoid(0.0115, 0.003, 0.0042, hair, collect);
+    browTail.position.set(side * 0.0438, 0.0498, -0.0658);
+    browTail.rotation.z = side * -0.32;
     head.add(browTail);
 
     // Oreille : pavillon ovale, creusé, collé à la tempe.
@@ -1083,7 +1413,10 @@ export function createHumanRig(): HumanRig {
     ["right", 1],
   ] as const) {
     const hip = thigh[key];
-    hip.position.set(sign * 0.09, -0.03, 0);
+    // Les cuisses se touchent presque à 9 cm du centre. Un homme debout a les
+    // pieds écartés de la largeur du bassin : sans cet écart, le pantalon se
+    // lit comme une seule jambe fendue.
+    hip.position.set(sign * 0.096, -0.03, 0);
     hips.add(hip);
 
     // La cuisse part sous le bassin sans l'élargir : c'est l'erreur classique
@@ -1091,8 +1424,8 @@ export function createHumanRig(): HumanRig {
     // couche. Elle s'affine vers le genou, qui reste la partie la plus étroite.
     const upperLeg = loft(
       [
-        { y: 0.07, rx: 0.084, rz: 0.094 },
-        { y: 0, rx: 0.092, rz: 0.101 },
+        { y: 0.07, rx: 0.078, rz: 0.086 },
+        { y: 0, rx: 0.086, rz: 0.094 },
         { y: -0.1, rx: 0.088, rz: 0.096 },
         { y: -0.2, rx: 0.08, rz: 0.088 },
         { y: -0.32, rx: 0.068, rz: 0.074 },
@@ -1188,6 +1521,7 @@ export function createHumanRig(): HumanRig {
 
   // Étui de cuisse et gaine : deux volumes qui cassent la ligne du pantalon.
   const holsterMaterial = leather(0x2a2018);
+  holsterMaterial.name = "cuir";
   materials.push(holsterMaterial);
   const holster = ellipsoid(0.024, 0.062, 0.026, holsterMaterial, collect);
   holster.position.set(0.107, -0.2, 0.005);
@@ -1243,6 +1577,89 @@ export function createHumanRig(): HumanRig {
   weaponHolder.add(flashLight);
 
   group.updateMatrixWorld(true);
+
+  // ------------------------------------------------------------------
+  // Patine
+  // ------------------------------------------------------------------
+  //
+  // Chaque pièce est peinte en coordonnées du monde au repos : la crasse
+  // monte du sol, les creux s'assombrissent, le grain casse l'aplat. Les
+  // matières sont partagées entre plusieurs pièces — une seule chemise pour
+  // le torse et les manches — donc c'est la géométrie qui porte la couleur,
+  // pas la matière.
+  //
+  // On le fait ici, une fois le squelette en place et les matrices à jour :
+  // peindre chaque pièce à sa construction obligerait à recalculer à la main
+  // la position du coude ou du genou dans chaque repère local.
+  // --- plis de tissu
+  // On les applique avant la patine : la patine lit la position, et un pli
+  // doit avoir sa propre ombre dans les creux qu'il vient de créer.
+  //
+  // L'ordre est important et rien ne l'impose : un pli appliqué après la
+  // peinture aurait des sommets colorés pour une surface qui n'existe plus.
+  group.updateMatrixWorld(true);
+  group.traverse((node) => {
+    const child = node as THREE.Mesh;
+    if (!child.isMesh) return;
+    const material = child.material as THREE.Material;
+    if (material === skin || material === skinShade) return;
+    if (material === sclera || material === irisMaterial || material === hair) return;
+    if (material === metal) return;
+    if (material === boots || material === holsterMaterial) return;
+    // Les pièces rigides — poches, boucle, sangles — ne se plissent pas. Une
+    // boîte gondolée se lit comme un défaut de modélisation, pas comme un
+    // vêtement.
+    if (child.geometry.type === "BoxGeometry") return;
+
+    // À quelle partie du corps appartient cette pièce ? On le déduit de la
+    // hauteur de son centre : c'est grossier, mais une pièce ne s'étend
+    // jamais sur deux régions à la fois, et cela évite de découper le corps
+    // en repères locaux qu'il faudrait tenir à jour.
+    const bounds = new THREE.Box3().setFromObject(child);
+    const centreY = (bounds.min.y + bounds.max.y) / 2;
+    const height = bounds.max.y - bounds.min.y;
+    const part: CreasePart =
+      centreY > 1.25 && height < 0.22
+        ? "bras"
+        : centreY > 1.05 && height < 0.4
+          ? "avant-bras"
+          : centreY > 1.15
+            ? "torse"
+            : centreY > 0.72
+              ? "cuisse"
+              : "tibia";
+    creaseGeometry(child.geometry, part, child.matrixWorld);
+  });
+
+  group.traverse((node) => {
+    const child = node as THREE.Mesh;
+    if (!child.isMesh) return;
+    const material = child.material as THREE.Material;
+    const kind: PaintKind =
+      material === skin || material === skinShade || material === sclera || material === irisMaterial
+        ? "peau"
+        : material === boots || material === holsterMaterial
+          ? "cuir"
+          : material === metal
+            ? "metal"
+            : material === pack
+              ? "toile"
+              : "tissu";
+    // Marque : ce maillage appartient au corps. L'arme, elle, est ajoutée
+    // plus tard dans `weaponHolder` et ne reçoit pas de patine — elle est
+    // déjà usée par sa propre matière. Les contrôles s'appuient sur ce
+    // marqueur pour ne pas confondre les deux.
+    child.userData.body = true;
+    paintGeometry(child.geometry, kind, child.matrixWorld);
+  });
+
+  // Toutes les matières lisent la couleur par sommet. Elle multiplie l'albédo,
+  // donc une pièce non peinte reste exactement ce qu'elle était.
+  for (const material of materials) {
+    const lit = material as THREE.MeshStandardMaterial;
+    lit.vertexColors = true;
+    lit.needsUpdate = true;
+  }
 
   return {
     group,
