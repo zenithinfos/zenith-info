@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 /**
- * Les arbres sont-ils solides ?
+ * Le marcheur traverse-t-il le bois ?
  *
  *   node scripts/check-collision.mjs
  *
- * On traversait les fûts de part en part : la forêt était une image, pas un
- * obstacle. Le contrôle ne se contente pas de vérifier qu'une fonction existe,
- * il fait marcher le moteur contre un arbre et regarde où il s'arrête.
+ * Deux défauts signalés : « l'explorateur transperce le tronc d'arbre au lieu
+ * de passer dessus », et il paraissait transparent. Les deux viennent du même
+ * endroit — le décor est dessiné, mais le corps du personnage peut s'y trouver.
+ * Quand une surface de bois traverse un torse, on voit le bois à la place du
+ * corps : le personnage a l'air coupé, ou translucide.
  *
- *   1. dans un fût, on n'est pas « libre » ;
- *   2. foncer droit dessus ne traverse pas — même à 60 images par seconde
- *      avec des pas de 28 cm ;
- *   3. on glisse le long du fût au lieu de s'arrêter net : la composante
- *      tangentielle du déplacement survit ;
- *   4. une marche au hasard dans la futaie ne finit jamais dans un tronc ;
- *   5. la trouée du camp reste vide — sinon le joueur démarre coincé.
+ * Le contrôle ne teste donc **pas** les colliders contre eux-mêmes (ce serait
+ * circulaire). Il reconstruit le bois tel qu'il est **dessiné** — les mêmes
+ * segments que le rendu, avec la même formule de rayon — et mesure la
+ * pénétration du corps dedans :
+ *
+ *   1. foncer sur un arbre : le corps n'entre jamais dans le fût ni dans ses
+ *      contreforts ;
+ *   2. se promener au hasard dans la futaie : aucune image dans le bois ;
+ *   3. les troncs tombés ne bloquent pas : ils se franchissent, et le corps
+ *      passe au-dessus, pas au travers ;
+ *   4. la caméra à l'épaule ne se laisse jamais séparer du personnage par un
+ *      fût — sinon on voit à travers le tronc et le corps paraît transparent ;
+ *   5. la forêt reste praticable : on avance vraiment.
  */
 
 import { build } from "esbuild";
@@ -26,7 +34,10 @@ const dir = await mkdtemp(path.join(tmpdir(), "minkebe-collision-"));
 const bundle = path.join(dir, "world.mjs");
 await build({
   stdin: {
-    contents: `export * from "./src/game/engine.ts"; export * from "./src/game/collision.ts"; export * from "./src/game/forest.ts"; export * from "./src/game/levels.ts";`,
+    contents: `export * from "./src/game/engine.ts";
+      export * from "./src/game/collision.ts";
+      export * from "./src/game/forest.ts";
+      export * from "./src/game/levels.ts";`,
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -40,8 +51,19 @@ await build({
 const world = await import(`${bundle}?t=${Date.now()}`);
 await rm(dir, { recursive: true, force: true });
 
-const { newGame, step, configureCollision, collidersNear, isClear, moveWalker, WALKER_RADIUS, SPAWN_CLEARING } =
-  world;
+const {
+  newGame,
+  step,
+  configureCollision,
+  isClear,
+  moveWalker,
+  stepOverAt,
+  cameraClearance,
+  WALKER_RADIUS,
+  buildTile,
+  tileOf,
+  SPAWN_CLEARING,
+} = world;
 
 let failures = 0;
 const check = (label, ok, detail = "") => {
@@ -50,13 +72,119 @@ const check = (label, ok, detail = "") => {
 };
 const round = (v) => Math.round(v * 100) / 100;
 
-// Mêmes densités que le rendu de bureau : les fûts testés sont ceux qu'on voit.
-configureCollision({
+// Mêmes densités que le rendu de bureau : le bois mesuré est celui qu'on voit.
+const OPTIONS = {
   treeDensity: 0.058,
   understoryDensity: 0.46,
   logDensity: 0.0025,
   clearing: { ...SPAWN_CLEARING },
-});
+};
+configureCollision(OPTIONS);
+
+/* -------------------------------------------------------------------------- */
+/* Le bois, tel qu'il est dessiné                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Empreinte au sol des segments de bois, calculée **comme le rendu**.
+ *
+ * Le rendu instancie un cylindre unitaire (rayon 1 en bas, 0,62 en haut) dont
+ * l'échelle vaut la moyenne des deux rayons du segment. On reprend donc cette
+ * moyenne : c'est le rayon réellement visible à la base du segment.
+ *
+ * Seule la tranche de hauteur qui compte pour un corps debout est retenue —
+ * de 0 à 1,8 m au-dessus du sol de l'arbre. Un contrefort qui plonge sous
+ * terre ne bloque rien ; sa partie haute, elle, est à hauteur de torse.
+ */
+const BODY_HEIGHT = 1.8;
+/**
+ * Hauteur du genou.
+ *
+ * En dessous, un marcheur enjambe : les racines affleurent la litière sur
+ * leurs derniers mètres et l'on pose le pied dessus. Au-dessus, le bois
+ * traverse vraiment le corps — c'est ça qu'on mesure.
+ */
+const KNEE = 0.45;
+
+/**
+ * En dessous de ce rayon, c'est du brin, pas du bois.
+ *
+ * Les semis portent des rameaux de un à cinq centimètres à hauteur de
+ * poitrine. Un corps qui les frôle n'est pas un corps qui traverse un arbre :
+ * on les écarte de la mesure, sinon le contrôle reproche au jeu ce qu'une
+ * vraie forêt fait à un vrai marcheur.
+ */
+const MIN_VISIBLE_WOOD = 0.1;
+
+function drawnWood(centerX, centerZ, ring = 1) {
+  const [cx, cz] = tileOf(centerX, centerZ);
+  const blocks = [];
+  const logs = [];
+  for (let dz = -ring; dz <= ring; dz++) {
+    for (let dx = -ring; dx <= ring; dx++) {
+      const tile = buildTile(cx + dx, cz + dz, OPTIONS);
+      for (const tree of tile.trees) {
+        for (const segment of tree.segments) {
+          const [fx, fy, fz] = segment.from;
+          const [tx, ty, tz] = segment.to;
+          // Le rendu étend le cylindre de `from` vers `to` ; on garde la
+          // portion comprise entre le sol et la hauteur d'un corps.
+          const lo = Math.max(KNEE, Math.min(fy, ty));
+          const hi = Math.min(BODY_HEIGHT, Math.max(fy, ty));
+          if (hi <= lo) continue;
+          const span = Math.abs(ty - fy) < 1e-6 ? 1 : (ty - fy);
+          const tA = Math.max(0, Math.min(1, (lo - fy) / span));
+          const tB = Math.max(0, Math.min(1, (hi - fy) / span));
+          if (tB - tA <= 0.001) continue;
+          const mean = (segment.radiusFrom + segment.radiusTo) * 0.5;
+          if (mean < MIN_VISIBLE_WOOD) continue;
+          blocks.push({
+            ax: tree.x + fx + (tx - fx) * tA,
+            az: tree.z + fz + (tz - fz) * tA,
+            bx: tree.x + fx + (tx - fx) * tB,
+            bz: tree.z + fz + (tz - fz) * tB,
+            // L'échelle du cylindre instancié : la moyenne des deux rayons.
+            r: mean,
+          });
+        }
+      }
+      for (const log of tile.logs) {
+        const half = log.length * 0.5;
+        logs.push({
+          ax: log.x - Math.cos(log.rotation) * half,
+          az: log.z - Math.sin(log.rotation) * half,
+          bx: log.x + Math.cos(log.rotation) * half,
+          bz: log.z + Math.sin(log.rotation) * half,
+          r: log.radius,
+          top: 0.25 + log.radius,
+          x: log.x,
+          z: log.z,
+        });
+      }
+    }
+  }
+  return { blocks, logs };
+}
+
+function distanceToSegment(x, z, block) {
+  const abx = block.bx - block.ax;
+  const abz = block.bz - block.az;
+  const lengthSq = abx * abx + abz * abz;
+  if (lengthSq < 1e-9) return Math.hypot(x - block.ax, z - block.az);
+  let t = ((x - block.ax) * abx + (z - block.az) * abz) / lengthSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(x - (block.ax + abx * t), z - (block.az + abz * t));
+}
+
+/** Profondeur maximale à laquelle le corps entre dans le bois dessiné. */
+function penetration(x, z, wood, radius = WALKER_RADIUS) {
+  let worst = 0;
+  for (const block of wood.blocks) {
+    const gap = distanceToSegment(x, z, block) - block.r - radius;
+    if (gap < 0) worst = Math.max(worst, -gap);
+  }
+  return worst;
+}
 
 /** Position de départ du jeu, sans eau ni pente. */
 const spawn = () => {
@@ -64,143 +192,140 @@ const spawn = () => {
   return { ...base, player: { ...base.player, position: [40, 0, 40] } };
 };
 
-/** Le fût le plus proche d'un point, dans un rayon donné. */
-function nearestTrunk(x, z, radius = 30) {
-  let best = null;
-  for (const c of collidersNear(x, z, radius)) {
-    const d = Math.hypot(c.x - x, c.z - z);
-    if (!best || d < best.d) best = { ...c, d };
-  }
-  return best;
+const wood = drawnWood(40, 40, 1);
+const nearest = wood.blocks
+  .map((block) => ({ block, d: distanceToSegment(40, 40, block) }))
+  .sort((a, b) => a.d - b.d)[0];
+
+console.log("\nLe bois mesuré");
+{
+  check("des segments de bois sont dessinés dans le secteur", wood.blocks.length > 200, `${wood.blocks.length} segments`);
+  check("le plus proche est à portée de marche", Boolean(nearest) && nearest.d < 12, nearest ? `${round(nearest.d)} m` : "");
 }
 
-console.log("\nUn fût est un solide");
-let target;
+console.log("\nFoncer sur un arbre");
 {
-  target = nearestTrunk(40, 40);
-  check("il y a un arbre dans le secteur", Boolean(target), target ? `r ${round(target.r)} m à ${round(target.d)} m` : "");
-  check(
-    "le centre du fût n'est pas libre",
-    target ? !isClear(target.x, target.z) : false,
-  );
-  check(
-    "juste à côté du fût, on est libre",
-    target ? isClear(target.x + target.r + WALKER_RADIUS + 0.15, target.z) : false,
-  );
-}
+  const target = nearest.block;
+  const midX = (target.ax + target.bx) / 2;
+  const midZ = (target.az + target.bz) / 2;
+  let state = spawn();
+  const fromX = midX;
+  const fromZ = midZ + 3.2;
+  state.player.position = [fromX, 0, fromZ];
+  const heading = Math.atan2(-(midX - fromX), -(midZ - fromZ));
 
-console.log("\nFoncer dessus ne le traverse pas");
-{
-  // Départ à 2 m, cap droit sur le tronc, cinq secondes de course : de quoi
-  // le traverser dix fois s'il n'était qu'une image.
-  const state = spawn();
-  const from = [target.x, target.z + target.r + 2];
-  state.player.position = [from[0], 0, from[1]];
-  const heading = Math.atan2(-(target.x - from[0]), -(target.z - from[1]));
-  let current = state;
+  let worst = 0;
   let closest = Infinity;
   let travelled = 0;
-  let previous = [from[0], from[1]];
-  for (let i = 0; i < 120; i += 1) {
-    current = step(current, { forward: true, run: true, cameraYaw: heading }, 0.05).state;
-    const [px, , pz] = current.player.position;
-    closest = Math.min(closest, Math.hypot(px - target.x, pz - target.z));
+  let previous = [fromX, fromZ];
+  for (let i = 0; i < 140; i += 1) {
+    state = step(state, { forward: true, run: true, cameraYaw: heading }, 0.05).state;
+    const [px, , pz] = state.player.position;
+    worst = Math.max(worst, penetration(px, pz, wood));
+    closest = Math.min(closest, Math.hypot(px - midX, pz - midZ));
     travelled += Math.hypot(px - previous[0], pz - previous[1]);
     previous = [px, pz];
   }
-  const reach = target.r + WALKER_RADIUS;
-  check(
-    "le marcheur ne pénètre jamais dans le fût",
-    closest >= reach - 0.02,
-    `plus proche ${round(closest)} m pour un contact à ${round(reach)} m`,
-  );
-  check("il a bien avancé avant de buter", travelled > 1.2, `${round(travelled)} m parcourus`);
-  const [, , pz] = current.player.position;
-  check("il est resté du bon côté", pz > target.z, `z ${round(pz)} contre ${round(target.z)}`);
+  check("le corps n'entre jamais dans le bois", worst === 0, `pénétration max ${worst.toFixed(3)} m`);
+  check("il a avancé avant de buter", travelled > 0.8, `${round(travelled)} m parcourus`);
+  check("distance d'arrêt cohérente", closest > 0.35, `${round(closest)} m du fût`);
 }
 
-console.log("\nOn glisse le long du tronc, on ne colle pas");
-{
-  // Arrivée en biais : la part de déplacement parallèle au fût doit survivre.
-  const state = spawn();
-  const side = 2.4;
-  const from = [target.x + side * 0.72, target.z + target.r + side * 0.72];
-  state.player.position = [from[0], 0, from[1]];
-  const heading = Math.atan2(-(target.x - from[0]), -(target.z - from[1]));
-  let current = state;
-  for (let i = 0; i < 80; i += 1) {
-    current = step(current, { forward: true, cameraYaw: heading }, 0.05).state;
-  }
-  const [px, , pz] = current.player.position;
-  const lateral = Math.abs(px - from[0]);
-  check("le marcheur a contourné le fût", lateral > 0.35, `${round(lateral)} m gagnés sur le côté`);
-  check("sans y entrer", Math.hypot(px - target.x, pz - target.z) >= target.r + WALKER_RADIUS - 0.02);
-}
-
-console.log("\nUn pas maladroit ne laisse pas dans le tronc");
-{
-  // Image en retard, télédéplacement, chute de réseau : le trajet est découpé,
-  // donc un grand pas ne peut pas ressortir de l'autre côté sans avoir été
-  // testé au passage.
-  const from = [target.x, target.z + target.r + 0.55];
-  const to = [target.x, target.z - target.r - 0.55];
-  const [x, z] = moveWalker(from[0], from[1], to[0], to[1]);
-  check("après un pas de 2,5 m, on n'est pas dans le fût", isClear(x, z, WALKER_RADIUS), `(${round(x)}, ${round(z)})`);
-
-  let trapped = 0;
-  let seed = 91;
-  const rand = () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-  };
-  let px = 34;
-  let pz = 46;
-  for (let i = 0; i < 400; i += 1) {
-    const angle = rand() * Math.PI * 2;
-    const distance = 0.2 + rand() * 1.3;
-    [px, pz] = moveWalker(px, pz, px + Math.cos(angle) * distance, pz + Math.sin(angle) * distance);
-    if (!isClear(px, pz)) trapped += 1;
-  }
-  check("quatre cents pas tirés au hasard, aucun dans un fût", trapped === 0, `${trapped} fin(s) dans un arbre`);
-}
-
-console.log("\nSe promener dans la futaie");
+console.log("\nMarcher dans la futaie");
 {
   let state = spawn();
-  let inside = 0;
-  let samples = 0;
-  // Marche au hasard : on tourne régulièrement et on avance. Trois cents
-  // images, soit une bonne quinzaine de mètres dans les arbres.
+  let worst = 0;
+  let worstAt = null;
   let yaw = 0;
   let seed = 7;
   const rand = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
-  for (let i = 0; i < 300; i += 1) {
+  for (let i = 0; i < 400; i += 1) {
     if (i % 25 === 0) yaw += (rand() - 0.5) * 2.4;
     state = step(state, { forward: true, cameraYaw: yaw, run: i % 3 === 0 }, 0.05).state;
     const [px, , pz] = state.player.position;
-    samples += 1;
-    if (!isClear(px, pz)) inside += 1;
+    const depth = penetration(px, pz, wood);
+    if (depth > worst) {
+      worst = depth;
+      worstAt = [px, pz];
+    }
   }
   const [px, , pz] = state.player.position;
-  check("aucune image passée dans un tronc", inside === 0, `${inside} sur ${samples} · arrivée (${round(px)}, ${round(pz)})`);
-  check("le marcheur a réellement parcouru la forêt", Math.hypot(px - 40, pz - 40) > 4, `${round(Math.hypot(px - 40, pz - 40))} m`);
+  check("aucune image dans le bois", worst === 0, worstAt ? `pire ${worst.toFixed(3)} m en (${round(worstAt[0])}, ${round(worstAt[1])})` : "");
+  check("la forêt reste praticable", Math.hypot(px - 40, pz - 40) > 4, `${round(Math.hypot(px - 40, pz - 40))} m parcourus`);
 }
 
-console.log("\nLa trouée du camp");
+console.log("\nLes troncs tombés se franchissent");
 {
-  let own = 0;
-  for (const c of collidersNear(SPAWN_CLEARING.x, SPAWN_CLEARING.z, SPAWN_CLEARING.radius + 6)) {
-    if (Math.hypot(c.x - SPAWN_CLEARING.x, c.z - SPAWN_CLEARING.z) < SPAWN_CLEARING.radius) own += 1;
+  // On cherche un tronc près du point de départ pour l'enjamber pour de vrai.
+  const logs = drawnWood(40, 40, 2).logs;
+  const log = logs.sort((a, b) => Math.hypot(a.x - 40, a.z - 40) - Math.hypot(b.x - 40, b.z - 40))[0];
+  check("un tronc tombé est dans le secteur", Boolean(log), log ? `r ${round(log.r)} m, dessus à ${round(log.top)} m` : "");
+  if (log) {
+    const onTop = stepOverAt(log.x, log.z);
+    check("sur le tronc, le corps est levé au-dessus du bois", onTop >= log.top * 0.95, `levée ${round(onTop)} m pour un dessus à ${round(log.top)} m`);
+    const away = stepOverAt(log.x, log.z + 6);
+    check("à six mètres, aucune levée", away === 0, `${round(away)} m`);
+    // Le tronc ne bloque pas : on doit pouvoir le traverser de part en part,
+    // mais *au-dessus*.
+    const [ex, ez] = moveWalker(log.x, log.z + 2.2, log.x, log.z - 2.2);
+    check("un tronc ne fait pas mur", Math.abs(ez - (log.z - 2.2)) < 0.6, `arrivée z ${round(ez)} pour visée ${round(log.z - 2.2)}`);
+    check("on le retraverse sans être bloqué", isClear(ex, ez));
   }
-  check("aucun fût dans la trouée de départ", own === 0, `${own} arbre(s)`);
-  check(
-    "le point de départ est libre",
-    isClear(0, 6) && isClear(0, 4) && isClear(0, 8) && isClear(1.5, 6),
-  );
 }
 
-console.log(failures === 0 ? "\nOn ne traverse plus les arbres.\n" : `\n${failures} vérification(s) en échec.\n`);
+console.log("\nLa caméra ne perd pas le personnage");
+{
+  // On se place de l'autre côté d'un fût : le tronc est entre l'épaule et le
+  // corps, exactement la situation où l'on voit à travers l'arbre.
+  const target = nearest.block;
+  const midX = (target.ax + target.bx) / 2;
+  const midZ = (target.az + target.bz) / 2;
+  const backX = midX;
+  const backZ = midZ + 3.1;
+  const free = cameraClearance(midX, midZ, backX, backZ);
+  check("la caméra est rapprochée", free < 1, `fraction libre ${free.toFixed(2)}`);
+
+  let state = spawn();
+  state.player.position = [midX, 0, midZ - 1.4];
+  let worstGap = 0;
+  for (let i = 0; i < 60; i += 1) {
+    state = step(state, { forward: false, cameraYaw: 0 }, 0.05).state;
+    const [px, , pz] = state.player.position;
+    // Position d'épaule théorique, puis rapprochée : on vérifie qu'aucun fût
+    // ne se trouve entre le corps et l'œil.
+    const distance = 3.1;
+    const camX = px;
+    const camZ = pz + distance;
+    const clearance = cameraClearance(px, pz, camX, camZ);
+    const finalX = px + (camX - px) * clearance;
+    const finalZ = pz + (camZ - pz) * clearance;
+    let blocked = false;
+    for (const block of wood.blocks) {
+      const steps = 14;
+      for (let s = 1; s < steps; s += 1) {
+        const t = s / steps;
+        const sx = px + (finalX - px) * t;
+        const sz = pz + (finalZ - pz) * t;
+        if (distanceToSegment(sx, sz, block) < block.r * 0.9) blocked = true;
+      }
+    }
+    if (blocked) worstGap += 1;
+  }
+  check("aucun fût entre l'œil et le corps", worstGap === 0, `${worstGap} image(s) gênée(s)`);
+}
+
+console.log("\nLe camp de départ");
+{
+  check("le point de départ est libre", isClear(0, 6) && isClear(0, 4) && isClear(1.5, 6));
+  const campWood = drawnWood(0, 6, 0);
+  const tooClose = campWood.blocks.filter(
+    (block) => distanceToSegment(0, 6, block) < block.r + WALKER_RADIUS,
+  ).length;
+  check("aucune pièce de bois sur le point de départ", tooClose === 0, `${tooClose} segment(s)`);
+}
+
+console.log(failures === 0 ? "\nOn traverse les troncs en passant dessus, jamais au travers.\n" : `\n${failures} vérification(s) en échec.\n`);
 process.exit(failures === 0 ? 0 : 1);

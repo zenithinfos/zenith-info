@@ -17,7 +17,7 @@ import {
 } from "@/game/sceneConfig";
 import { WATER_BODIES, rainParams, waterDepthAt, waterLevelAt } from "@/game/water";
 import { DEFAULT_START, SPAWN_CLEARING, ZONES } from "@/game/levels";
-import { configureCollision } from "@/game/collision";
+import { cameraClearance, configureCollision, stepOverAt } from "@/game/collision";
 import {
   buildTile,
   plantCards,
@@ -1952,6 +1952,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     // Points de vue et suivi du personnage.
     let viewMode: SceneView = "troisieme";
     let rigYaw = DEFAULT_START.heading;
+    /**
+     * Hauteur gagnée en enjambant un tronc tombé, lissée.
+     *
+     * Le moteur ignore les troncs couchés : ils ne bloquent pas, ils se
+     * franchissent. C'est donc au rendu de lever le corps — sans ce lissage,
+     * le personnage monterait d'un coup de quarante centimètres.
+     */
+    let stepUp = 0;
     let previousPlayerX = 0;
     let previousPlayerZ = 6;
     const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -1991,12 +1999,19 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       previousPlayerZ = playerPosition.z;
 
       const inWater = waterDepthAt(playerPosition.x, playerPosition.z) > 0.15;
+
+      // Troncs tombés : on passe dessus. La montée suit le dessus du bois,
+      // avec un amorti pour que ce soit une enjambée et non un saut. Dans
+      // l'eau, on n'enjambe rien : le tronc est sous la surface.
+      const stepTarget = inWater ? 0 : stepOverAt(playerPosition.x, playerPosition.z);
+      stepUp += (stepTarget - stepUp) * (1 - Math.exp(-dt * 12));
+
       const bodyY = inWater
         ? Math.min(
             groundUnderPlayer + 1.1 + playerHeight * 0.4,
             waterLevelAt(playerPosition.x, playerPosition.z) - 0.75,
           )
-        : groundUnderPlayer + playerHeight;
+        : groundUnderPlayer + playerHeight + stepUp;
 
       if (viewMode === "troisieme") {
         playerRig.group.visible = true;
@@ -2031,7 +2046,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       if (viewMode === "premier") {
         camera.position.set(
           playerPosition.x + sway,
-          groundUnderPlayer + playerHeight + HUMAN_EYE_Y + Math.abs(Math.sin(bob)) * bobAmplitude,
+          groundUnderPlayer + playerHeight + stepUp + HUMAN_EYE_Y + Math.abs(Math.sin(bob)) * bobAmplitude,
           playerPosition.z,
         );
         // Le plus court chemin, toujours : une interpolation linéaire entre
@@ -2052,14 +2067,39 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         const rightX = Math.cos(targetYaw);
         const rightZ = -Math.sin(targetYaw);
 
-        const desiredX = playerPosition.x - forwardX * distance + rightX * side;
-        const desiredZ = playerPosition.z - forwardZ * distance + rightZ * side;
-        const desiredY = pivotY - forwardY * distance + 0.16;
+        let desiredX = playerPosition.x - forwardX * distance + rightX * side;
+        let desiredZ = playerPosition.z - forwardZ * distance + rightZ * side;
+        let desiredY = pivotY - forwardY * distance + 0.16;
+
+        // Un tronc entre l'œil et le personnage : le bois est dessiné en faces
+        // avant, donc on voit *à travers* lui et le corps paraît transparent,
+        // coupé par le décor. On rapproche la caméra avant qu'elle n'y entre.
+        const free = cameraClearance(playerPosition.x, playerPosition.z, desiredX, desiredZ);
+        if (free < 1) {
+          desiredX = playerPosition.x + (desiredX - playerPosition.x) * free;
+          desiredZ = playerPosition.z + (desiredZ - playerPosition.z) * free;
+          desiredY = pivotY + (desiredY - pivotY) * free;
+        }
         // Amorti exponentiel : indépendant de la cadence d'images.
         const ease = 1 - Math.exp(-dt * 18);
         camera.position.x += (desiredX - camera.position.x) * ease;
         camera.position.y += (desiredY - camera.position.y) * ease;
         camera.position.z += (desiredZ - camera.position.z) * ease;
+
+        // Le lissage met quelques images à rejoindre la position voulue : on
+        // revérifie après coup, sinon la caméra traverse le bois pendant ce
+        // temps-là.
+        const stillFree = cameraClearance(
+          playerPosition.x,
+          playerPosition.z,
+          camera.position.x,
+          camera.position.z,
+        );
+        if (stillFree < 1) {
+          camera.position.x = playerPosition.x + (camera.position.x - playerPosition.x) * stillFree;
+          camera.position.z = playerPosition.z + (camera.position.z - playerPosition.z) * stillFree;
+          camera.position.y = pivotY + (camera.position.y - pivotY) * stillFree;
+        }
 
         // Jamais sous le sol, jamais dans la pente.
         const floor = terrainHeight(camera.position.x, camera.position.z) + 0.42;

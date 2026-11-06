@@ -222,6 +222,46 @@ for (const motion of ["idle", "walk", "run", "sneak"]) {
 check("aucune matrice NaN", finite, "40 images par allure");
 
 // ---------------------------------------------------------------------------
+console.log("\nLes volumes regardent vers l'extérieur");
+// ---------------------------------------------------------------------------
+// Un maillage retourné ne se voit pas dans un rendu qui dessine les deux
+// faces ; il se voit très bien en jeu, où seules les faces avant sont
+// dessinées : on aperçoit alors la paroi opposée du membre, et le corps paraît
+// creux — « transparent ». Dix-sept pièces étaient dans ce cas, parce qu'un
+// bras s'énumère de l'épaule vers la main et un torse de la taille vers les
+// épaules : le même ordre d'indices retourne l'un et pas l'autre.
+//
+// On mesure le volume signé : positif, les faces regardent dehors.
+let inverted = 0;
+let meshes = 0;
+rig.group.traverse((child) => {
+  if (!child.isMesh) return;
+  const geometry = child.geometry;
+  const index = geometry.index;
+  const position = geometry.attributes.position;
+  if (!index) return;
+  meshes += 1;
+  let volume = 0;
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i) * 3;
+    const b = index.getX(i + 1) * 3;
+    const c = index.getX(i + 2) * 3;
+    const ax = position.array[a];
+    const ay = position.array[a + 1];
+    const az = position.array[a + 2];
+    const bx = position.array[b];
+    const by = position.array[b + 1];
+    const bz = position.array[b + 2];
+    const cx = position.array[c];
+    const cy = position.array[c + 1];
+    const cz = position.array[c + 2];
+    volume += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  }
+  if (volume < 0) inverted += 1;
+});
+check("aucun maillage retourné", inverted === 0, `${inverted} sur ${meshes}`);
+
+// ---------------------------------------------------------------------------
 // Rendu logiciel
 // ---------------------------------------------------------------------------
 const panels = [

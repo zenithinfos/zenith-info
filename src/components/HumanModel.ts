@@ -164,6 +164,35 @@ type Ring = {
  * tuyau. `power` règle la superellipse : 2 = cercle, 2,4 = torse (plus large
  * que profond, un peu carré).
  */
+/**
+ * Volume signé d'un maillage fermé.
+ *
+ * Le signe dit de quel côté regardent les faces : positif, elles pointent vers
+ * l'extérieur ; négatif, vers l'intérieur. C'est la seule façon fiable de
+ * savoir si un tube est retourné, sans dépendre de l'ordre d'énumération de
+ * ses sections.
+ */
+function signedVolume(positions: number[], indices: number[]): number {
+  let total = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i] * 3;
+    const b = indices[i + 1] * 3;
+    const c = indices[i + 2] * 3;
+    const ax = positions[a];
+    const ay = positions[a + 1];
+    const az = positions[a + 2];
+    const bx = positions[b];
+    const by = positions[b + 1];
+    const bz = positions[b + 2];
+    const cx = positions[c];
+    const cy = positions[c + 1];
+    const cz = positions[c + 2];
+    total +=
+      ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  }
+  return total / 6;
+}
+
 function loftGeometry(
   rings: Ring[],
   options: { radial?: number; power?: number; tile?: number; smooth?: number } = {},
@@ -257,6 +286,28 @@ function loftGeometry(
   for (let i = 0; i < radial; i++) {
     indices.push(bottomCentre, i, (i + 1) % radial);
     indices.push(topCentre, topBase + ((i + 1) % radial), topBase + i);
+  }
+
+  // Sens d'enroulement — décidé par la géométrie, pas par convention.
+  //
+  // Le même ordre d'indices ne donne pas le même sens selon qu'on a énuméré
+  // les sections de bas en haut (torse, tête) ou de haut en bas (bras, jambe :
+  // on les décrit de l'épaule vers la main). Résultat, dix-sept pièces du
+  // corps se retrouvaient avec leurs normales tournées vers l'intérieur. En
+  // rendu « faces avant », on voit alors la paroi opposée du membre : le corps
+  // paraît creux, donc translucide.
+  //
+  // On calcule donc le volume signé du maillage fermé. Négatif, les faces
+  // regardent dedans : on inverse tous les triangles. C'est vrai quel que
+  // soit l'ordre dans lequel les sections ont été écrites, et ça le restera
+  // pour la prochaine pièce qu'on ajoutera.
+  const volume = signedVolume(positions, indices);
+  if (volume < 0) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const swap = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = swap;
+    }
   }
 
   const geometry = new THREE.BufferGeometry();
