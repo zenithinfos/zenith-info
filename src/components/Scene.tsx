@@ -2550,7 +2550,7 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
           <div className="max-w-sm space-y-2">
             <p className="text-3xl">🌳</p>
             <p className="display text-xl">Vue 3D indisponible</p>
-            <p className="text-sm text-mist/70">
+            <p className="text-sm text-ink-soft">
               Votre navigateur ne prend pas en charge WebGL. Le carnet de terrain et la
               carte GPS restent utilisables.
             </p>

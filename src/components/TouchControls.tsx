@@ -124,8 +124,8 @@ export default function TouchControls({ onMove, onAction, visible = true }: Touc
             }}
             className={`grid h-11 w-11 place-items-center rounded-full border text-xs backdrop-blur active:scale-95 ${
               running
-                ? "border-laterite-400 bg-laterite-500/40 text-parchment"
-                : "border-mist/25 bg-canopy-900/70 text-mist/80"
+                ? "border-laterite-400 bg-laterite-500/40 text-ink"
+                : "border-mist/25 bg-canopy-900/70 text-ink-soft"
             }`}
             aria-pressed={running}
             aria-label="Courir"

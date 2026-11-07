@@ -125,12 +125,12 @@ export default function GameTrailer({
             className="group absolute inset-0 grid place-items-center bg-gradient-to-t from-canopy-950/85 via-canopy-950/25 to-canopy-950/40 transition hover:from-canopy-950/70"
             aria-label={t("trailer.play")}
           >
-            <span className="grid h-20 w-20 place-items-center rounded-full border border-parchment/40 bg-canopy-950/60 text-2xl text-parchment backdrop-blur transition group-hover:scale-105 group-hover:border-amber-glow group-hover:text-amber-glow">
+            <span className="grid h-20 w-20 place-items-center rounded-full border border-parchment/40 bg-canopy-950/60 text-2xl text-ink backdrop-blur transition group-hover:scale-105 group-hover:border-amber-glow group-hover:text-amber-glow">
               ▶
             </span>
             <span className="absolute bottom-5 left-5 right-5 text-left">
               <span className="eyebrow block">{t("trailer.kicker")}</span>
-              <span className="display block text-xl text-parchment sm:text-2xl">
+              <span className="display block text-xl text-ink sm:text-2xl">
                 {t("trailer.title")}
               </span>
             </span>
@@ -144,7 +144,7 @@ export default function GameTrailer({
             role="img"
             aria-label={t("trailer.unavailable")}
           >
-            <p className="absolute inset-x-0 bottom-4 px-4 text-center text-[0.7rem] text-laterite-400">
+            <p className="absolute inset-x-0 bottom-4 px-4 text-center text-caption text-laterite-400">
               {t("trailer.unavailable")}
             </p>
           </div>
@@ -157,12 +157,12 @@ export default function GameTrailer({
               <button
                 type="button"
                 onClick={toggle}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-sm text-parchment"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-sm text-ink"
                 aria-label={playing ? t("trailer.pause") : t("trailer.play")}
               >
                 {playing ? "❙❙" : "▶"}
               </button>
-              <span className="font-mono text-[0.65rem] text-mist/70">
+              <span className="font-mono text-caption text-ink-soft">
                 {formatTime(time)} / {formatTime(duration)}
               </span>
               <label className="flex flex-1 items-center">
@@ -193,7 +193,7 @@ export default function GameTrailer({
                   if (!video) return;
                   if (video.requestFullscreen) void video.requestFullscreen();
                 }}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-xs text-parchment"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-xs text-ink"
                 aria-label="Plein écran"
               >
                 ⛶
@@ -208,10 +208,10 @@ export default function GameTrailer({
                     type="button"
                     onClick={() => seekChapter(index)}
                     aria-current={index === current ? "true" : undefined}
-                    className={`rounded-full border px-2 py-0.5 text-[0.6rem] transition ${
+                    className={`rounded-full border px-2 py-0.5 text-micro transition ${
                       index === current
                         ? "border-amber-glow/60 bg-amber-glow/15 text-amber-glow"
-                        : "border-mist/15 text-mist/55 hover:border-moss-300 hover:text-parchment"
+                        : "border-mist/15 text-ink-muted hover:border-moss-300 hover:text-ink"
                     }`}
                   >
                     <span className="font-mono opacity-60">{formatTime(entry.at)}</span>{" "}
@@ -225,7 +225,7 @@ export default function GameTrailer({
       </div>
 
       <figcaption className="sr-only">{t("trailer.note")}</figcaption>
-      <p className="border-t border-mist/10 px-4 py-2 text-[0.65rem] text-mist/45">
+      <p className="border-t border-mist/10 px-4 py-2 text-caption text-ink-muted">
         {t("trailer.note")}
       </p>
       <p className="sr-only" aria-live="polite">

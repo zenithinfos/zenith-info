@@ -85,7 +85,7 @@ export default function GpsMap({
       <header className="mb-2 flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow">GPS</p>
-          <p className="text-sm font-semibold text-parchment">{currentZone.name}</p>
+          <p className="text-sm font-semibold text-ink">{currentZone.name}</p>
         </div>
         <div className="flex items-center gap-2">
           <span className="chip">
@@ -95,7 +95,7 @@ export default function GpsMap({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full border border-mist/20 px-2 py-0.5 text-xs text-mist/70 hover:border-moss-300 hover:text-parchment"
+              className="rounded-full border border-mist/20 px-2 py-0.5 text-xs text-ink-soft hover:border-moss-300 hover:text-ink"
               aria-label="Fermer la carte"
             >
               ✕
@@ -214,13 +214,13 @@ export default function GpsMap({
           </g>
         </svg>
 
-        <div className="absolute bottom-1.5 right-2 text-[0.55rem] uppercase tracking-widest text-mist/40">
+        <div className="absolute bottom-1.5 right-2 text-micro uppercase tracking-widest text-ink-muted">
           échelle 1:{Math.round(WORLD / 5)}
         </div>
       </div>
 
       {!compact && (
-        <footer className="mt-2 flex flex-wrap gap-1.5 text-[0.62rem] text-mist/60">
+        <footer className="mt-2 flex flex-wrap gap-1.5 text-caption text-ink-muted">
           <span className="chip">🟡 Vous</span>
           <span className="chip">🟢 Équipe</span>
           <span className="chip">🔵 Eau</span>

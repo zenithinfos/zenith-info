@@ -1172,14 +1172,14 @@ export default function MinkebeGame() {
                   {/* Une seule carte : lieu, heure, jauges, expérience, paquetage */}
                   <div className="pointer-events-auto panel-tight w-[15.5rem] divide-y divide-mist/10 overflow-hidden">
                     <div className="px-3 py-1.5">
-                      <p className="text-[0.55rem] uppercase tracking-[0.24em] text-moss-300">
+                      <p className="text-micro uppercase tracking-[0.24em] text-moss-300">
                         {clock.phase} · {t("game.day")} {clock.day}
                       </p>
                       <p className="mt-0.5 flex items-baseline justify-between gap-2">
-                        <span className="display truncate text-sm leading-tight text-parchment">
+                        <span className="display truncate text-sm leading-tight text-ink">
                           {zone?.name}
                         </span>
-                        <span className="shrink-0 text-[0.55rem] tabular-nums text-mist/45">
+                        <span className="shrink-0 text-micro tabular-nums text-ink-muted">
                           {String(Math.floor(clock.hour)).padStart(2, "0")}:
                           {String(Math.floor((clock.hour % 1) * 60)).padStart(2, "0")} ·{" "}
                           {weatherLabel(hud.weather.current)} · {Math.round(hud.vitals.temperature)} °C
@@ -1202,13 +1202,13 @@ export default function MinkebeGame() {
                 <div className="flex flex-col items-end gap-1.5">
                   <CompassBar heading={hud.player.heading} waypoints={waypoints} className="w-52 md:w-64" />
                   {/* Un seul bandeau de chiffres, au lieu de trois cartes */}
-                  <div className="rounded-lg bg-canopy-950/40 px-2.5 py-1 text-right text-[0.6rem] leading-relaxed text-mist/60">
+                  <div className="rounded-lg bg-canopy-950/40 px-2.5 py-1 text-right text-micro leading-relaxed text-ink-muted">
                     <p className="tabular-nums">
                       <span className="text-sky-300">🐾 {mewasFound(hud.mewas)}/{MEWA_COUNT}</span>
-                      <span className="mx-1.5 text-mist/25">·</span>🧵 {hud.threads}
-                      <span className="mx-1.5 text-mist/25">·</span>⭐ {hud.level}
+                      <span className="mx-1.5 text-ink-muted">·</span>🧵 {hud.threads}
+                      <span className="mx-1.5 text-ink-muted">·</span>⭐ {hud.level}
                     </p>
-                    <p className="tabular-nums text-[0.55rem] text-mist/40">
+                    <p className="tabular-nums text-micro text-ink-muted">
                       {hud.score} pts · {Math.round(hud.hunt.meat)} kg · {totalKills} bête
                       {totalKills > 1 ? "s" : ""}
                     </p>
@@ -1227,10 +1227,10 @@ export default function MinkebeGame() {
                         key={entry.id}
                         type="button"
                         onClick={() => equip(entry.id)}
-                        className={`flex items-center gap-1 rounded-full px-2 py-1 text-[0.6rem] transition ${
+                        className={`flex items-center gap-1 rounded-full px-2 py-1 text-micro transition ${
                           active
-                            ? "bg-parchment/15 text-parchment"
-                            : "text-mist/55 hover:text-parchment"
+                            ? "bg-parchment/15 text-ink"
+                            : "text-ink-muted hover:text-ink"
                         }`}
                         aria-pressed={active}
                       >
@@ -1257,7 +1257,7 @@ export default function MinkebeGame() {
                   {hitMarker !== "none" && (
                     <span
                       className={`absolute inset-0 grid place-items-center text-lg leading-none ${
-                        hitMarker === "kill" ? "text-laterite-400" : "text-parchment"
+                        hitMarker === "kill" ? "text-laterite-400" : "text-ink"
                       }`}
                     >
                       ✕
@@ -1268,16 +1268,16 @@ export default function MinkebeGame() {
 
               <div className="pointer-events-none absolute inset-x-0 top-[57%] z-10 flex flex-col items-center gap-1">
                 {targetLabel && (
-                  <p className="rounded-full bg-canopy-950/60 px-2.5 py-0.5 text-[0.65rem] text-parchment/85 backdrop-blur">
+                  <p className="rounded-full bg-canopy-950/60 px-2.5 py-0.5 text-caption text-ink backdrop-blur">
                     {targetLabel}
                   </p>
                 )}
-                <p className="font-mono text-[0.68rem] tracking-wide text-parchment/75">
+                <p className="font-mono text-caption tracking-wide text-ink">
                   {heldWeapon.kind === "feu"
                     ? `${heldAmmo.loaded} / ${heldAmmo.reserve}`
                     : "lame"}
                 </p>
-                <div className="flex items-center gap-2 text-[0.6rem] text-parchment/70">
+                <div className="flex items-center gap-2 text-micro text-ink">
                   {hud.blocking && (
                     <span className="rounded-full bg-sky-400/20 px-2 py-0.5">🛡 {t("game.blocking")}</span>
                   )}
@@ -1297,14 +1297,14 @@ export default function MinkebeGame() {
                   <button
                     type="button"
                     onClick={skinCarcass}
-                    className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-glow/50 bg-canopy-950/80 px-3 py-1.5 text-xs text-parchment backdrop-blur"
+                    className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-glow/50 bg-canopy-950/80 px-3 py-1.5 text-xs text-ink backdrop-blur"
                   >
                     🔪 {t("game.skin")} · {carcassNear}
                     <kbd className="rounded bg-canopy-700 px-1.5 py-0.5 font-sans">E</kbd>
                   </button>
                 )}
                 {ambient && (
-                  <p className="max-w-xl rounded-full bg-canopy-950/50 px-4 py-1 text-center text-[0.68rem] italic text-mist/65 backdrop-blur-sm">
+                  <p className="max-w-xl rounded-full bg-canopy-950/50 px-4 py-1 text-center text-caption italic text-ink-muted backdrop-blur-sm">
                     {ambient}
                   </p>
                 )}
@@ -1328,7 +1328,7 @@ export default function MinkebeGame() {
                       un ruban de formulaires en travers de la forêt. */}
                   <button
                     type="button"
-                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-ink backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => {
                       document.exitPointerLock?.();
                       setShowDressing(true);
@@ -1342,8 +1342,8 @@ export default function MinkebeGame() {
                     type="button"
                     className={`grid h-8 w-8 place-items-center rounded-full border text-xs backdrop-blur-sm transition ${
                       showControls
-                        ? "border-parchment/40 bg-parchment/15 text-parchment"
-                        : "border-mist/15 bg-canopy-950/55 text-parchment/80 hover:bg-canopy-800/80"
+                        ? "border-parchment/40 bg-parchment/15 text-ink"
+                        : "border-mist/15 bg-canopy-950/55 text-ink hover:bg-canopy-800/80"
                     }`}
                     onClick={() => openControls(!showControls)}
                     aria-expanded={showControls}
@@ -1354,7 +1354,7 @@ export default function MinkebeGame() {
                   </button>
                   <button
                     type="button"
-                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-ink backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => setShowMap((v) => !v)}
                     aria-label={t("game.map")}
                     title={`${t("game.map")} · M`}
@@ -1363,7 +1363,7 @@ export default function MinkebeGame() {
                   </button>
                   <button
                     type="button"
-                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-ink backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => setView((v) => (v === "premier" ? "troisieme" : "premier"))}
                     aria-pressed={view === "troisieme"}
                     aria-label={view === "troisieme" ? t("game.viewShoulder") : t("game.viewFirst")}
@@ -1373,7 +1373,7 @@ export default function MinkebeGame() {
                   </button>
                   <button
                     type="button"
-                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-parchment/80 backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/15 bg-canopy-950/55 text-xs text-ink backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => void saveGame()}
                     aria-label={t("game.save")}
                     title={t("game.save")}
@@ -1384,8 +1384,8 @@ export default function MinkebeGame() {
                     type="button"
                     className={`grid h-8 w-8 place-items-center rounded-full border text-xs backdrop-blur-sm transition ${
                       voiceOn
-                        ? "border-amber-glow/60 bg-amber-glow/25 text-parchment"
-                        : "border-mist/15 bg-canopy-950/55 text-parchment/80 hover:bg-canopy-800/80"
+                        ? "border-amber-glow/60 bg-amber-glow/25 text-ink"
+                        : "border-mist/15 bg-canopy-950/55 text-ink hover:bg-canopy-800/80"
                     }`}
                     onClick={() => setVoiceOn((v) => !v)}
                     aria-pressed={voiceOn}
@@ -1396,7 +1396,7 @@ export default function MinkebeGame() {
                   </button>
                   <button
                     type="button"
-                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-xs text-parchment backdrop-blur-sm transition hover:bg-canopy-800/80"
+                    className="grid h-8 w-8 place-items-center rounded-full border border-mist/25 bg-canopy-950/70 text-xs text-ink backdrop-blur-sm transition hover:bg-canopy-800/80"
                     onClick={() => setPhase("pause")}
                     aria-label={t("game.pause")}
                     title={`${t("game.pause")} · Échap`}
@@ -1476,7 +1476,7 @@ export default function MinkebeGame() {
                   onPointerLeave={() => {
                     firingRef.current = false;
                   }}
-                  className="grid h-20 w-20 place-items-center rounded-full border border-laterite-400/60 bg-laterite-500/30 text-xs font-semibold uppercase tracking-wider text-parchment backdrop-blur active:scale-95"
+                  className="grid h-20 w-20 place-items-center rounded-full border border-laterite-400/60 bg-laterite-500/30 text-xs font-semibold uppercase tracking-wider text-ink backdrop-blur active:scale-95"
                   aria-label={t("game.fire")}
                 >
                   {t("game.fire")}
@@ -1551,7 +1551,7 @@ export default function MinkebeGame() {
                           : "game.deathBlessure") as DictionaryKey,
                     )}
                   </h3>
-                  <p className="text-sm leading-relaxed text-mist/70">
+                  <p className="text-sm leading-relaxed text-ink-soft">
                     {t(
                       (hud.death.cause === "soif"
                         ? "game.deathSoifNote"
@@ -1576,17 +1576,17 @@ export default function MinkebeGame() {
                         key={stat.label}
                         className="rounded-xl border border-mist/12 bg-canopy-900/60 px-3 py-2"
                       >
-                        <p className="text-[0.55rem] uppercase tracking-wider text-mist/50">
+                        <p className="text-micro uppercase tracking-wider text-ink-muted">
                           {stat.label}
                         </p>
-                        <p className="text-sm font-semibold tabular-nums text-parchment">
+                        <p className="text-sm font-semibold tabular-nums text-ink">
                           {stat.value}
                         </p>
                       </div>
                     ))}
                   </div>
 
-                  <p className="text-[0.7rem] text-mist/60">
+                  <p className="text-caption text-ink-muted">
                     ⭐ {Math.round(hud.xp)} XP
                     {hud.xp >= SURVIVAL_PRIZE_XP
                       ? ` · 🏆 ${t("game.prizeWon")}`
@@ -1608,10 +1608,10 @@ export default function MinkebeGame() {
                       ⌂ {t("game.pause")}
                     </button>
                     {boardState === "envoi" && (
-                      <span className="text-[0.65rem] text-mist/50">…</span>
+                      <span className="text-caption text-ink-muted">…</span>
                     )}
                     {boardState === "hors-ligne" && (
-                      <span className="text-[0.65rem] text-laterite-400">
+                      <span className="text-caption text-laterite-400">
                         Classement indisponible
                       </span>
                     )}
@@ -1621,7 +1621,7 @@ export default function MinkebeGame() {
                 <div className="panel space-y-2 p-4">
                   <p className="eyebrow">{t("game.leaderboard")}</p>
                   {board.length === 0 ? (
-                    <p className="text-xs text-mist/55">{t("game.leaderboardEmpty")}</p>
+                    <p className="text-xs text-ink-muted">{t("game.leaderboardEmpty")}</p>
                   ) : (
                     <ol className="space-y-1">
                       {board.map((row, index) => (
@@ -1629,18 +1629,18 @@ export default function MinkebeGame() {
                           key={row.id}
                           className="flex items-baseline justify-between gap-2 rounded-lg px-2 py-1 text-xs odd:bg-canopy-900/40"
                         >
-                          <span className="w-6 shrink-0 text-mist/45 tabular-nums">
+                          <span className="w-6 shrink-0 text-ink-muted tabular-nums">
                             {index + 1}
                           </span>
-                          <span className="min-w-0 flex-1 truncate text-parchment/85">
+                          <span className="min-w-0 flex-1 truncate text-ink">
                             {row.name}
                             {row.score === hud.death?.score && index + 1 === boardRank && (
-                              <span className="ml-1 text-[0.6rem] text-sky-300">
+                              <span className="ml-1 text-micro text-sky-300">
                                 ({t("game.leaderboardYou")})
                               </span>
                             )}
                           </span>
-                          <span className="shrink-0 text-mist/50">
+                          <span className="shrink-0 text-ink-muted">
                             🐾 {row.mewas} · {Math.floor(row.seconds / 60)} min
                           </span>
                           <span className="w-14 shrink-0 text-right font-semibold tabular-nums text-amber-glow">
@@ -1662,19 +1662,19 @@ export default function MinkebeGame() {
                 {/* Le nom du jeu, en clair. C'est la première chose qu'on
                     doit lire en arrivant : le titre, pas un sous-titre. */}
                 <div className="space-y-2">
-                  <p className="text-[0.6rem] uppercase tracking-[0.42em] text-moss-300">
+                  <p className="text-micro uppercase tracking-[0.42em] text-moss-300">
                     {t("hero.kicker")}
                   </p>
-                  <h2 className="display text-5xl leading-[0.9] tracking-[0.16em] text-parchment md:text-7xl">
+                  <h2 className="display text-5xl leading-[0.9] tracking-[0.16em] text-ink md:text-7xl">
                     {t("hero.title")}
                   </h2>
                   <span className="block h-px w-28 bg-gradient-to-r from-amber-glow via-laterite-400/60 to-transparent" />
                 </div>
                 <p className="eyebrow">{t("hero.place")}</p>
-                <h3 className="display text-xl text-parchment/90 md:text-2xl">
+                <h3 className="display text-xl text-ink md:text-2xl">
                   {t("game.title")}
                 </h3>
-                <p className="max-w-xl text-sm text-mist/75">
+                <p className="max-w-xl text-sm text-ink-soft">
                   Suivez la faune dans la futaie de l&apos;Ogooué-Ivindo : épaulez une arme,
                   abattez, dépecez. La viande se rapporte au camp ; le carnet garde la
                   trace du reste.
@@ -1688,14 +1688,14 @@ export default function MinkebeGame() {
                       onClick={() => setCharacterId(candidate.id)}
                       className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
                         characterId === candidate.id
-                          ? "border-amber-glow bg-amber-glow/15 text-parchment"
-                          : "border-mist/20 text-mist/70 hover:border-moss-300"
+                          ? "border-amber-glow bg-amber-glow/15 text-ink"
+                          : "border-mist/20 text-ink-soft hover:border-moss-300"
                       }`}
                       aria-pressed={characterId === candidate.id}
                     >
                       <span>{candidate.id === "chercheuse" ? "🧑🏾‍🔬" : "🧑🏾‍🌾"}</span>
                       {candidate.name}
-                      <span className="text-[0.6rem] text-mist/50">{candidate.role}</span>
+                      <span className="text-micro text-ink-muted">{candidate.role}</span>
                     </button>
                   ))}
                 </div>
@@ -1719,8 +1719,8 @@ export default function MinkebeGame() {
                   </button>
                 </div>
 
-                <p className="text-[0.7rem] text-mist/45">
-                  <kbd className="rounded bg-canopy-800 px-1 text-parchment/80">H</kbd>{" "}
+                <p className="text-caption text-ink-muted">
+                  <kbd className="rounded bg-canopy-800 px-1 text-ink">H</kbd>{" "}
                   {t("controls.open")} · {t("game.mobile")}
                 </p>
               </div>
@@ -1747,28 +1747,28 @@ export default function MinkebeGame() {
                     ⌂ Retour au menu
                   </button>
                 </div>
-                <div className="rounded-xl border border-mist/10 bg-canopy-900/50 p-3 text-xs text-mist/70">
-                  <p className="mb-1 font-semibold text-parchment">Carnet de terrain</p>
+                <div className="rounded-xl border border-mist/10 bg-canopy-900/50 p-3 text-xs text-ink-soft">
+                  <p className="mb-1 font-semibold text-ink">Carnet de terrain</p>
                   <p>
                     {hud?.observedSpecies.length ?? 0} espèce(s) observée(s) ·{" "}
                     {faunaScore(hud?.observedSpecies ?? [])} points ·{" "}
                     {hud?.visitedZones.length ?? 0} zone(s) explorée(s).
                   </p>
                 </div>
-                <details className="rounded-xl border border-mist/10 bg-canopy-900/50 p-3 text-xs text-mist/70">
-                  <summary className="cursor-pointer select-none font-semibold text-parchment">
+                <details className="rounded-xl border border-mist/10 bg-canopy-900/50 p-3 text-xs text-ink-soft">
+                  <summary className="cursor-pointer select-none font-semibold text-ink">
                     ⌨ {t("controls.open")}
                   </summary>
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
                     {CONTROL_GROUPS.map((group) => (
                       <section key={group.key}>
-                        <p className="mb-1 text-[0.55rem] uppercase tracking-[0.2em] text-moss-300">
+                        <p className="mb-1 text-micro uppercase tracking-[0.2em] text-moss-300">
                           {t(group.key)}
                         </p>
                         <ul className="space-y-0.5">
                           {group.rows.map((row) => (
-                            <li key={row.label} className="flex items-baseline gap-1.5 text-[0.62rem]">
-                              <kbd className="shrink-0 rounded bg-canopy-800 px-1 py-0.5 font-sans text-[0.55rem] text-parchment/85">
+                            <li key={row.label} className="flex items-baseline gap-1.5 text-caption">
+                              <kbd className="shrink-0 rounded bg-canopy-800 px-1 py-0.5 font-sans text-micro text-ink">
                                 {localiseKeys(row.keys, locale)}
                               </kbd>
                               <span>{t(row.label)}</span>
@@ -1797,8 +1797,8 @@ export default function MinkebeGame() {
                       : "border-mist/15 bg-canopy-900/85"
                 }`}
               >
-                <p className="font-semibold text-parchment">{toast.title}</p>
-                {toast.detail && <p className="text-mist/65">{toast.detail}</p>}
+                <p className="font-semibold text-ink">{toast.title}</p>
+                {toast.detail && <p className="text-ink-muted">{toast.detail}</p>}
               </div>
             ))}
           </div>
@@ -1806,11 +1806,11 @@ export default function MinkebeGame() {
 
         {/* Barre multijoueur */}
         <div className="flex flex-col gap-3 border-t border-mist/10 bg-canopy-900/60 p-3 md:flex-row md:items-center md:justify-between md:px-5">
-          <div className="flex items-center gap-2 text-xs text-mist/70">
+          <div className="flex items-center gap-2 text-xs text-ink-soft">
             <span className={`h-2 w-2 rounded-full ${room ? "bg-moss-300" : "bg-mist/30"}`} />
             {room ? (
               <span>
-                {t("game.room")} <strong className="text-parchment">{room.code}</strong> ·{" "}
+                {t("game.room")} <strong className="text-ink">{room.code}</strong> ·{" "}
                 {remotePlayers.length + 1}/{room.maxPlayers} {t("game.explorers")}
               </span>
             ) : (
@@ -1825,7 +1825,7 @@ export default function MinkebeGame() {
                   value={joinCode}
                   onChange={(event) => setJoinCode(event.target.value.toUpperCase().slice(0, 6))}
                   placeholder="CODE"
-                  className="w-24 rounded-full border border-mist/20 bg-canopy-950/60 px-3 py-1.5 text-center text-xs uppercase tracking-widest text-parchment placeholder:text-mist/30 focus:border-moss-300 focus:outline-none"
+                  className="w-24 rounded-full border border-mist/20 bg-canopy-950/60 px-3 py-1.5 text-center text-xs uppercase tracking-widest text-ink placeholder:text-ink-muted focus:border-moss-300 focus:outline-none"
                   aria-label="Code du salon"
                 />
                 <button
@@ -1860,7 +1860,7 @@ export default function MinkebeGame() {
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-mist/55">
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
         <span className="chip">{character.role}</span>
         <span className="chip">🌡️ {formatVitals(hud)}</span>
         <span className="chip">🎒 {hud?.gadgets.length ?? 0} gadgets</span>
@@ -1891,19 +1891,19 @@ function Objectives({ state, label }: { state: GameState; label: (key: Dictionar
   // (brief, compteurs) reste accessible en pause.
   if (!status.level) {
     return (
-      <p className="max-w-[15.5rem] rounded-full bg-canopy-950/45 px-2.5 py-1 text-[0.62rem] text-mist/70 backdrop-blur-sm">
+      <p className="max-w-[15.5rem] rounded-full bg-canopy-950/45 px-2.5 py-1 text-caption text-ink-soft backdrop-blur-sm">
         {label("game.expeditionDone")} · {state.progress.completed.length}/{LEVELS.length}
       </p>
     );
   }
 
   return (
-    <div className="max-w-[15.5rem] rounded-full bg-canopy-950/45 px-2.5 py-1 text-[0.62rem] leading-tight text-mist/70 backdrop-blur-sm">
-      <span className="tabular-nums text-mist/45">
+    <div className="max-w-[15.5rem] rounded-full bg-canopy-950/45 px-2.5 py-1 text-caption leading-tight text-ink-soft backdrop-blur-sm">
+      <span className="tabular-nums text-ink-muted">
         {index + 1}/{LEVELS.length}
       </span>{" "}
-      <span className="text-parchment">{label(status.level.title as DictionaryKey)}</span>
-      <span className="mx-1 text-mist/30">·</span>
+      <span className="text-ink">{label(status.level.title as DictionaryKey)}</span>
+      <span className="mx-1 text-ink-muted">·</span>
       {status.objectives.map((entry) => (
         <span key={entry.objective.id} className={entry.done ? "text-moss-300" : ""}>
           {entry.done ? "✓" : "○"}{" "}
@@ -1911,7 +1911,7 @@ function Objectives({ state, label }: { state: GameState; label: (key: Dictionar
             {entry.current}/{entry.target}
           </span>
           {entry !== status.objectives[status.objectives.length - 1] && (
-            <span className="mx-1 text-mist/25">·</span>
+            <span className="mx-1 text-ink-muted">·</span>
           )}
         </span>
       ))}
@@ -1944,7 +1944,7 @@ function Vitals({
         const low = value < 20;
         return (
           <div key={bar.key} className="flex items-center gap-1.5">
-            <span aria-hidden className="w-3 text-center text-[0.6rem] leading-none">
+            <span aria-hidden className="w-3 text-center text-micro leading-none">
               {bar.icon}
             </span>
             <div
@@ -1963,8 +1963,8 @@ function Vitals({
               />
             </div>
             <span
-              className={`w-6 text-right text-[0.55rem] tabular-nums ${
-                low ? "text-laterite-400" : "text-mist/45"
+              className={`w-6 text-right text-micro tabular-nums ${
+                low ? "text-laterite-400" : "text-ink-muted"
               }`}
             >
               {Math.round(value)}
@@ -1973,7 +1973,7 @@ function Vitals({
         );
       })}
       <div className="flex items-center gap-1.5 pt-0.5">
-        <span aria-hidden className="w-3 text-center text-[0.6rem] leading-none">
+        <span aria-hidden className="w-3 text-center text-micro leading-none">
           ⭐
         </span>
         <div
@@ -1989,7 +1989,7 @@ function Vitals({
             style={{ width: `${Math.round(progress.ratio * 100)}%` }}
           />
         </div>
-        <span className="w-6 text-right text-[0.55rem] tabular-nums text-mist/45">{level}</span>
+        <span className="w-6 text-right text-micro tabular-nums text-ink-muted">{level}</span>
       </div>
     </div>
   );
@@ -2020,15 +2020,15 @@ function FieldKit({
   className?: string;
 }) {
   return (
-    <div className={`flex items-center gap-1 px-3 py-1.5 text-[0.6rem] text-mist/65 ${className}`}>
+    <div className={`flex items-center gap-1 px-3 py-1.5 text-micro text-ink-muted ${className}`}>
       <span className="tabular-nums" title={label("game.wood")}>
         🪵 {state.wood}
       </span>
-      <span className="text-mist/20">·</span>
+      <span className="text-ink-muted">·</span>
       <span className="tabular-nums" title={label("game.fruit")}>
         🍈 {state.fruits}
       </span>
-      <span className="text-mist/20">·</span>
+      <span className="text-ink-muted">·</span>
       <span className="tabular-nums" title={label("game.shelter")}>
         🏠 {state.shelters.length}
       </span>
@@ -2036,10 +2036,10 @@ function FieldKit({
         <button
           type="button"
           onClick={onBuild}
-          className={`grid h-6 w-6 place-items-center rounded-full text-[0.62rem] transition ${
+          className={`grid h-6 w-6 place-items-center rounded-full text-caption transition ${
             state.wood >= SHELTER_WOOD
-              ? "bg-amber-glow/25 text-parchment hover:bg-amber-glow/40"
-              : "bg-canopy-800/60 text-mist/35"
+              ? "bg-amber-glow/25 text-ink hover:bg-amber-glow/40"
+              : "bg-canopy-800/60 text-ink-muted"
           }`}
           aria-label={label("game.shelterBuild")}
           title={`${label("game.shelterBuild")} · B`}
@@ -2050,7 +2050,7 @@ function FieldKit({
           <button
             type="button"
             onClick={onSleep}
-            className="grid h-6 w-6 place-items-center rounded-full bg-moss-300/25 text-[0.62rem] text-parchment hover:bg-moss-300/40"
+            className="grid h-6 w-6 place-items-center rounded-full bg-moss-300/25 text-caption text-ink hover:bg-moss-300/40"
             aria-label={label("game.sleep")}
             title={`${label("game.sleep")} · N`}
           >
@@ -2060,8 +2060,8 @@ function FieldKit({
         <button
           type="button"
           onClick={onGoggles}
-          className={`grid h-6 w-6 place-items-center rounded-full text-[0.62rem] transition ${
-            state.goggles ? "bg-sky-300/30 text-sky-100" : "bg-canopy-800/60 text-mist/45"
+          className={`grid h-6 w-6 place-items-center rounded-full text-caption transition ${
+            state.goggles ? "bg-sky-300/30 text-sky-100" : "bg-canopy-800/60 text-ink-muted"
           }`}
           aria-pressed={state.goggles}
           aria-label={label("game.goggles")}
@@ -2158,12 +2158,12 @@ function ControlsPanel({
         <div className="mb-2 flex items-start justify-between gap-3">
           <div>
             <p className="eyebrow">{label("controls.title")}</p>
-            <p className="text-[0.62rem] text-mist/50">{label("controls.hint")}</p>
+            <p className="text-caption text-ink-muted">{label("controls.hint")}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-mist/20 px-2 py-0.5 text-[0.6rem] text-mist/70 transition hover:text-parchment"
+            className="rounded-full border border-mist/20 px-2 py-0.5 text-micro text-ink-soft transition hover:text-ink"
             aria-label={label("controls.close")}
           >
             ✕ <kbd className="opacity-60">H</kbd>
@@ -2172,23 +2172,23 @@ function ControlsPanel({
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {CONTROL_GROUPS.map((group) => (
             <section key={group.key}>
-              <p className="mb-1 text-[0.55rem] uppercase tracking-[0.2em] text-moss-300">
+              <p className="mb-1 text-micro uppercase tracking-[0.2em] text-moss-300">
                 {label(group.key)}
               </p>
               <ul className="space-y-1">
                 {group.rows.map((row) => (
-                  <li key={row.label} className="flex items-baseline gap-1.5 text-[0.62rem] leading-snug">
-                    <kbd className="shrink-0 rounded bg-canopy-800 px-1 py-0.5 font-sans text-[0.55rem] text-parchment/85">
+                  <li key={row.label} className="flex items-baseline gap-1.5 text-caption leading-snug">
+                    <kbd className="shrink-0 rounded bg-canopy-800 px-1 py-0.5 font-sans text-micro text-ink">
                       {localiseKeys(row.keys, locale)}
                     </kbd>
-                    <span className="text-mist/65">{label(row.label)}</span>
+                    <span className="text-ink-muted">{label(row.label)}</span>
                   </li>
                 ))}
               </ul>
             </section>
           ))}
         </div>
-        <p className="mt-2 border-t border-mist/10 pt-1.5 text-[0.58rem] text-mist/45">
+        <p className="mt-2 border-t border-mist/10 pt-1.5 text-micro text-ink-muted">
           {label("controls.touch")}
         </p>
       </div>

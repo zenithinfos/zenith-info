@@ -164,12 +164,12 @@ export default function MusicPlayer() {
           {track.emoji}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-parchment">{track.title}</p>
-          <p className="truncate text-[0.65rem] text-mist/55">
+          <p className="truncate text-sm font-semibold text-ink">{track.title}</p>
+          <p className="truncate text-caption text-ink-muted">
             {track.artist} · {track.mood}
           </p>
         </div>
-        <span className="text-[0.65rem] tabular-nums text-mist/40">{track.duration}</span>
+        <span className="text-caption tabular-nums text-ink-muted">{track.duration}</span>
       </div>
 
       <div className="h-1 overflow-hidden rounded-full bg-canopy-700">
@@ -195,7 +195,7 @@ export default function MusicPlayer() {
           ⏭
         </button>
 
-        <label className="ml-auto flex items-center gap-2 text-[0.65rem] text-mist/50">
+        <label className="ml-auto flex items-center gap-2 text-caption text-ink-muted">
           🔊
           <input
             type="range"
@@ -216,21 +216,21 @@ export default function MusicPlayer() {
             <button
               type="button"
               onClick={() => setIndex(itemIndex)}
-              className={`flex w-full items-center justify-between rounded-lg px-2 py-1 text-left text-[0.7rem] transition ${
-                itemIndex === index ? "bg-moss-400/10 text-parchment" : "text-mist/60 hover:bg-canopy-800"
+              className={`flex w-full items-center justify-between rounded-lg px-2 py-1 text-left text-caption transition ${
+                itemIndex === index ? "bg-moss-400/10 text-ink" : "text-ink-muted hover:bg-canopy-800"
               }`}
             >
               <span className="truncate">
                 {itemIndex === index && playing ? "▶ " : ""}
                 {item.title}
               </span>
-              <span className="text-mist/35">{item.duration}</span>
+              <span className="text-ink-muted">{item.duration}</span>
             </button>
           </li>
         ))}
       </ul>
 
-      {error && <p className="text-[0.65rem] text-laterite-400">{error}</p>}
+      {error && <p className="text-caption text-laterite-400">{error}</p>}
     </section>
   );
 }

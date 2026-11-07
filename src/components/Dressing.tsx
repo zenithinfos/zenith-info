@@ -94,8 +94,8 @@ export default function Dressing({
             }`}
             aria-pressed={character === candidate.id}
           >
-            <span className="block font-semibold text-parchment">{candidate.name}</span>
-            <span className="text-[0.65rem] text-mist/60">
+            <span className="block font-semibold text-ink">{candidate.name}</span>
+            <span className="text-caption text-ink-muted">
               {characterCopy(candidate, locale).role}
             </span>
           </button>
@@ -134,8 +134,8 @@ export default function Dressing({
                     {item.emoji}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-parchment">{item.name}</span>
-                    <span className="block truncate text-[0.65rem] text-mist/55">
+                    <span className="block truncate text-sm text-ink">{item.name}</span>
+                    <span className="block truncate text-caption text-ink-muted">
                       {unlocked
                         ? item.description
                         : magic
@@ -144,7 +144,7 @@ export default function Dressing({
                     </span>
                   </span>
                   {magic && (
-                    <span className="shrink-0 text-[0.6rem] tabular-nums text-sky-300">
+                    <span className="shrink-0 text-micro tabular-nums text-sky-300">
                       {wovenAlready ? `✓ ${t("game.dressWoven")}` : `${item.threads} 🧵`}
                     </span>
                   )}
@@ -155,7 +155,7 @@ export default function Dressing({
                       type="button"
                       disabled={!weavable}
                       onClick={() => onWeave?.(item.id)}
-                      className="text-[0.62rem] font-semibold uppercase tracking-wider text-sky-300 transition disabled:cursor-not-allowed disabled:text-mist/35"
+                      className="text-caption font-semibold uppercase tracking-wider text-sky-300 transition disabled:cursor-not-allowed disabled:text-ink-muted"
                     >
                       🪡 {t("game.dressThreads")} · {item.threads} 🧵
                     </button>
@@ -165,24 +165,24 @@ export default function Dressing({
             );
           })}
           {available.length < OUTFITS.length && (
-            <p className="text-[0.65rem] text-mist/45">
+            <p className="text-caption text-ink-muted">
               {OUTFITS.length - available.length} {t("dressing.lockedNote")}
             </p>
           )}
           {woven.length === 0 && (
-            <p className="text-[0.65rem] text-sky-300/70">🐾 {t("game.dressNone")}</p>
+            <p className="text-caption text-sky-300">🐾 {t("game.dressNone")}</p>
           )}
         </div>
 
         <div className="rounded-xl border border-mist/12 bg-canopy-950/50 p-4">
           <p className="eyebrow mb-2">{t("dressing.effect")}</p>
-          <p className="mb-3 text-sm font-semibold text-parchment">{current.name}</p>
+          <p className="mb-3 text-sm font-semibold text-ink">{current.name}</p>
           <div className="space-y-2">
             {stats.map((stat) => {
               const percent = Math.min(100, (stat.value / stat.max) * 100);
               return (
                 <div key={stat.key}>
-                  <div className="flex justify-between text-[0.65rem] text-mist/65">
+                  <div className="flex justify-between text-caption text-ink-muted">
                     <span>{stat.key}</span>
                     <span className="tabular-nums">{Math.round(percent)} %</span>
                   </div>
@@ -196,7 +196,7 @@ export default function Dressing({
               );
             })}
           </div>
-          <p className="mt-3 text-[0.65rem] leading-relaxed text-mist/50">{current.description}</p>
+          <p className="mt-3 text-caption leading-relaxed text-ink-muted">{current.description}</p>
         </div>
       </div>
     </section>

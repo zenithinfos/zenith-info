@@ -16,7 +16,42 @@
   --color-mist: #c9d8cc;
 
   --font-sans: "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
-  --font-display: "Georgia", "Iowan Old Style", "Palatino Linotype", serif;
+  /* Renseignée par `next/font/local` sur <body> ; le repli sert au premier
+     rendu, avant que la fonte ne soit disponible. */
+  --font-display: var(--font-display-loaded), "Georgia", "Iowan Old Style", serif;
+
+  /* ---------------------------------------------------------------------
+   * Échelle typographique
+   *
+   * Cinq pas, et pas un de plus. L'interface en comptait treize, choisis un
+   * par un au fil des retouches, dont huit sous douze pixels : des étiquettes
+   * à 8,8 px qu'on ne lit pas, et deux tailles voisines qui ne se distinguent
+   * plus. Une échelle courte force à choisir un rôle pour chaque texte —
+   * légende, courant, chapô, titre — au lieu de régler chaque bloc à l'œil.
+   * ------------------------------------------------------------------- */
+  --text-micro: 0.6875rem; /* 11 px — étiquettes, unités, touches */
+  --text-micro--line-height: 1.35;
+  --text-caption: 0.75rem; /* 12 px — notes, légendes, métadonnées */
+  --text-caption--line-height: 1.5;
+  --text-body: 0.875rem; /* 14 px — texte courant */
+  --text-body--line-height: 1.6;
+  --text-lede: 1rem; /* 16 px — chapô, paragraphes d'introduction */
+  --text-lede--line-height: 1.7;
+  --text-hero: 7.5rem; /* le titre du héros, un seul emploi */
+  --text-hero--line-height: 0.86;
+
+  /* ---------------------------------------------------------------------
+   * Trois tons de texte, opaques
+   *
+   * La hiérarchie se faisait par opacité du même gris — quinze paliers, de
+   * 20 à 90 %. Sous 60 % sur un panneau, on passe sous le seuil AA : le texte
+   * secondaire devenait du bruit gris. Trois tons calculés pour rester
+   * lisibles (11:1, 6:1, 14:1 sur le fond le plus clair), et l'on hiérarchise
+   * par la taille et la graisse, pas en délavant.
+   * ------------------------------------------------------------------- */
+  --color-ink: #f3ead7; /* titres et valeurs — 14:1 */
+  --color-ink-soft: #c9d8cc; /* texte courant — 11:1 */
+  --color-ink-muted: #8fa492; /* notes et métadonnées — 6,3:1 */
 
   --shadow-jungle: 0 24px 60px -24px rgb(4 12 8 / 0.85);
   --radius-panel: 1.25rem;
@@ -65,19 +100,36 @@
 }
 
 @layer components {
+  /*
+   * Les panneaux.
+   *
+   * Un rectangle sombre posé sur une image n'a pas de matière : il flotte.
+   * On lui en donne trois choses — un très fin liseré clair en haut (la
+   * lumière qui accroche l'arête), un fond légèrement dégradé (le verre
+   * n'est jamais uniforme) et un flou suffisant pour que la scène reste
+   * présente derrière. C'est ce qui distingue un panneau d'un trou.
+   */
   .panel {
     border-radius: var(--radius-panel);
-    border: 1px solid rgb(201 216 204 / 0.12);
+    border: 1px solid rgb(201 216 204 / 0.14);
     background:
-      linear-gradient(160deg, rgb(15 32 24 / 0.92), rgb(6 13 9 / 0.92));
-    box-shadow: var(--shadow-jungle);
-    backdrop-filter: blur(10px);
+      linear-gradient(160deg, rgb(15 32 24 / 0.9), rgb(6 13 9 / 0.94));
+    box-shadow:
+      var(--shadow-jungle),
+      inset 0 1px 0 rgb(255 255 255 / 0.06);
+    backdrop-filter: blur(14px) saturate(1.1);
   }
 
+  /* Le panneau du HUD, au-dessus de la 3D : plus dense, plus petit rayon. */
   .panel-tight {
     border-radius: 0.9rem;
-    border: 1px solid rgb(201 216 204 / 0.1);
-    background: rgb(10 22 16 / 0.75);
+    border: 1px solid rgb(201 216 204 / 0.13);
+    background:
+      linear-gradient(165deg, rgb(12 26 19 / 0.86), rgb(6 13 9 / 0.9));
+    box-shadow:
+      0 10px 30px -18px rgb(4 12 8 / 0.9),
+      inset 0 1px 0 rgb(255 255 255 / 0.05);
+    backdrop-filter: blur(12px) saturate(1.05);
   }
 
   .eyebrow {
@@ -157,6 +209,27 @@
     opacity: 0.06;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.9'/%3E%3C/svg%3E");
   }
+}
+
+/**
+ * Voile du héros.
+ *
+ * Trois dégradés superposés, et non un voile uniforme : le haut doit rester
+ * assez sombre pour que l'en-tête se lise sur le feuillage, le bas doit se
+ * fondre dans la page, et les bords doivent ramener le regard au centre. Un
+ * voile unique donnait soit un titre illisible sur un ciel clair, soit une
+ * image éteinte.
+ */
+.hero-scrim {
+  background-image:
+    radial-gradient(ellipse at center, transparent 26%, rgb(6 13 9 / 0.68) 100%),
+    linear-gradient(
+      to bottom,
+      rgb(6 13 9 / 0.94) 0%,
+      rgb(6 13 9 / 0.52) 32%,
+      rgb(6 13 9 / 0.78) 74%,
+      var(--color-canopy-950) 100%
+    );
 }
 
 @keyframes float-up {

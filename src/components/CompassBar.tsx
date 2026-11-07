@@ -54,7 +54,7 @@ export default function CompassBar({
   return (
     <div className={`pointer-events-none select-none ${className}`}>
       <div className="panel-tight relative overflow-hidden px-3 py-2">
-        <div className="flex items-center justify-between text-[0.62rem] uppercase tracking-[0.22em] text-mist/60">
+        <div className="flex items-center justify-between text-caption uppercase tracking-[0.22em] text-ink-muted">
           <span>{Math.round(bearing).toString().padStart(3, "0")}°</span>
           <span className="text-amber-glow">{cardinal(bearing)}</span>
         </div>
@@ -79,7 +79,7 @@ export default function CompassBar({
                   }`}
                 />
                 {isMajor && (
-                  <span className="mt-0.5 block text-[0.6rem] font-semibold text-mist/80">
+                  <span className="mt-0.5 block text-micro font-semibold text-ink-soft">
                     {label}
                   </span>
                 )}
@@ -107,7 +107,7 @@ export default function CompassBar({
                 title={`${waypoint.label} — ${Math.round(waypoint.distance)} m`}
               >
                 <div className={`h-1.5 w-1.5 rounded-full ${colour}`} />
-                <span className="mt-0.5 block max-w-14 truncate text-[0.55rem] text-mist/60">
+                <span className="mt-0.5 block max-w-14 truncate text-micro text-ink-muted">
                   {Math.round(waypoint.distance)} m
                 </span>
               </div>

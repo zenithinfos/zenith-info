@@ -15,6 +15,7 @@
     "db:push": "drizzle-kit push",
     "check:forest": "node scripts/check-forest.mjs",
     "check:sky": "node scripts/check-sky.mjs",
+    "check:design": "node scripts/check-design.mjs",
     "check:canopy": "node scripts/check-canopy.mjs",
     "check:hunt": "node scripts/check-hunt.mjs",
     "check:human": "node scripts/check-human.mjs",

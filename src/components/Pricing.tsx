@@ -91,8 +91,8 @@ export default function Pricing() {
       <div className="space-y-4">
         <div>
           <p className="eyebrow">{t("support.kicker")}</p>
-          <h2 className="display mt-1 text-3xl text-parchment">{t("pricing.title")}</h2>
-          <p className="mt-2 max-w-2xl text-sm text-mist/65">{t("pricing.lede")}</p>
+          <h2 className="display mt-1 text-3xl text-ink">{t("pricing.title")}</h2>
+          <p className="mt-2 max-w-2xl text-sm text-ink-muted">{t("pricing.lede")}</p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -111,16 +111,16 @@ export default function Pricing() {
                 aria-pressed={active}
               >
                 {candidate.recommended && (
-                  <span className="absolute right-3 top-3 rounded-full bg-amber-glow/20 px-2 py-0.5 text-[0.55rem] uppercase tracking-wider text-amber-glow">
+                  <span className="absolute right-3 top-3 rounded-full bg-amber-glow/20 px-2 py-0.5 text-micro uppercase tracking-wider text-amber-glow">
                     {t("pricing.recommended")}
                   </span>
                 )}
-                <p className="text-sm font-semibold text-parchment">{candidate.label}</p>
-                <p className="display mt-1 text-2xl text-parchment">
+                <p className="text-sm font-semibold text-ink">{candidate.label}</p>
+                <p className="display mt-1 text-2xl text-ink">
                   {formatPrice(candidate.amountCents, candidate.currency)}
                 </p>
-                <p className="mt-0.5 text-[0.62rem] text-mist/50">{candidate.tagline}</p>
-                <ul className="mt-2 space-y-1 text-[0.66rem] text-mist/65">
+                <p className="mt-0.5 text-caption text-ink-muted">{candidate.tagline}</p>
+                <ul className="mt-2 space-y-1 text-caption text-ink-muted">
                   {candidate.perks.map((perk) => (
                     <li key={perk}>· {perk}</li>
                   ))}
@@ -134,13 +134,13 @@ export default function Pricing() {
       <form onSubmit={submit} className="panel space-y-3 p-5">
         <div>
           <p className="eyebrow">{t("pricing.payment")}</p>
-          <p className="text-sm font-semibold text-parchment">
+          <p className="text-sm font-semibold text-ink">
             {plan.label} · {formatPrice(plan.amountCents, plan.currency)}
           </p>
         </div>
 
         <fieldset className="space-y-1.5">
-          <legend className="mb-1 text-[0.62rem] uppercase tracking-[0.18em] text-mist/45">
+          <legend className="mb-1 text-caption uppercase tracking-[0.18em] text-ink-muted">
             {t("pricing.provider")}
           </legend>
           {PROVIDERS.map((item) => (
@@ -162,8 +162,8 @@ export default function Pricing() {
               />
               <span className="text-base">{item.icon}</span>
               <span className="flex-1">
-                <span className="block font-semibold text-parchment">{item.label}</span>
-                <span className="block text-[0.6rem] text-mist/50">
+                <span className="block font-semibold text-ink">{item.label}</span>
+                <span className="block text-micro text-ink-muted">
                   {item.id === "paypal" ? t("pricing.provider.card") : item.note}
                 </span>
               </span>
@@ -172,25 +172,25 @@ export default function Pricing() {
         </fieldset>
 
         {provider === "paypal" ? (
-          <label className="block text-[0.65rem] text-mist/60">
+          <label className="block text-caption text-ink-muted">
             {t("pricing.email")}
             <input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="vous@exemple.ga"
-              className="mt-1 w-full rounded-lg border border-mist/20 bg-canopy-950/60 px-3 py-2 text-sm text-parchment placeholder:text-mist/30 focus:border-moss-300 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-mist/20 bg-canopy-950/60 px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-moss-300 focus:outline-none"
             />
           </label>
         ) : (
-          <label className="block text-[0.65rem] text-mist/60">
+          <label className="block text-caption text-ink-muted">
             {t("pricing.phone")}
             <input
               type="tel"
               value={phone}
               onChange={(event) => setPhone(event.target.value)}
               placeholder="+241 06 00 00 00"
-              className="mt-1 w-full rounded-lg border border-mist/20 bg-canopy-950/60 px-3 py-2 text-sm text-parchment placeholder:text-mist/30 focus:border-moss-300 focus:outline-none"
+              className="mt-1 w-full rounded-lg border border-mist/20 bg-canopy-950/60 px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-moss-300 focus:outline-none"
             />
           </label>
         )}
@@ -201,16 +201,16 @@ export default function Pricing() {
             : `${t("pricing.pay")} ${formatPrice(plan.amountCents, plan.currency)}`}
         </button>
 
-        <p className="text-[0.6rem] leading-relaxed text-mist/40">{t("pricing.demo")}</p>
+        <p className="text-micro leading-relaxed text-ink-muted">{t("pricing.demo")}</p>
 
         {status && (
-          <p className="rounded-lg border border-moss-300/30 bg-moss-400/10 px-3 py-2 text-[0.7rem] text-parchment">
+          <p className="rounded-lg border border-moss-300/30 bg-moss-400/10 px-3 py-2 text-caption text-ink">
             {status}
           </p>
         )}
         {reference && (
-          <p className="text-[0.6rem] text-mist/45">
-            {t("pricing.reference")} <strong className="text-parchment">{reference}</strong>.
+          <p className="text-micro text-ink-muted">
+            {t("pricing.reference")} <strong className="text-ink">{reference}</strong>.
           </p>
         )}
       </form>

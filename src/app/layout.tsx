@@ -1,7 +1,26 @@
 import type { Metadata, Viewport } from "next";
+import localFont from "next/font/local";
 import "./globals.css";
 import { APP_NAME, APP_VERSION } from "@/lib/version";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+
+/**
+ * La fonte de titrage.
+ *
+ * Georgia était le serif par défaut du navigateur : correct, sans caractère,
+ * et surtout identique à des millions d'autres pages. Fraunces a des empattements
+ * taillés et un axe optique qui tient à très grande taille — c'est ce qu'on
+ * demande à un logotype de jeu. Elle est **auto-hébergée** : dix-huit
+ * kilo-octets dans le dépôt, aucune requête vers un tiers, et rien à charger
+ * pour l'utilisateur hors de notre domaine.
+ */
+const display = localFont({
+  src: [{ path: "../../public/fonts/fraunces-600.woff2", weight: "600", style: "normal" }],
+  variable: "--font-display-loaded",
+  display: "swap",
+  fallback: ["Georgia", "Iowan Old Style", "Palatino Linotype", "serif"],
+  preload: true,
+});
 
 export const metadata: Metadata = {
   title: {
@@ -26,7 +45,7 @@ export const metadata: Metadata = {
       "Un jeu de survie et d'exploration dans la forêt de Minkébé, province de l'Ogooué-Ivindo au Gabon — en solo ou à huit.",
     type: "website",
     locale: "fr_FR",
-    images: [{ url: "/images/menu-forest.jpg", width: 1600, height: 900, alt: "Canopée de Minkébé" }],
+    images: [{ url: "/images/trailer-poster.jpg", width: 960, height: 540, alt: "Sous-bois de Minkébé" }],
   },
   other: { "app-version": APP_VERSION },
 };
@@ -42,7 +61,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="fr-FR">
-      <body className="min-h-dvh antialiased">
+      <body className={`${display.variable} min-h-dvh antialiased`}>
         <LocaleProvider>
           <a
             href="#jeu"

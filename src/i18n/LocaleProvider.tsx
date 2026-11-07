@@ -127,10 +127,10 @@ export function LanguageSwitcher({ className = "" }: { className?: string }) {
             aria-pressed={active}
             lang={LOCALE_TAGS[code]}
             title={LOCALE_LABELS[code]}
-            className={`rounded-full px-2 py-1 text-[0.62rem] font-semibold tracking-[0.14em] transition ${
+            className={`rounded-full px-2 py-1 text-caption font-semibold tracking-[0.14em] transition ${
               active
                 ? "bg-amber-glow/20 text-amber-glow"
-                : "text-mist/55 hover:text-parchment"
+                : "text-ink-muted hover:text-ink"
             }`}
           >
             {LOCALE_SHORT[code]}

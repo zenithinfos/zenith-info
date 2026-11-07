@@ -39,7 +39,7 @@ export default async function AdminPage({
           <div>
             <p className="eyebrow">Administration</p>
             <h1 className="display text-2xl">Accès restreint</h1>
-            <p className="mt-1 text-xs text-mist/60">
+            <p className="mt-1 text-xs text-ink-muted">
               Renseignez le jeton <code className="rounded bg-canopy-900 px-1">ADMIN_TOKEN</code> défini
               sur le serveur.
             </p>
@@ -48,14 +48,14 @@ export default async function AdminPage({
             type="password"
             name="token"
             placeholder="Jeton administrateur"
-            className="w-full rounded-lg border border-mist/20 bg-canopy-950/60 px-3 py-2 text-sm text-parchment placeholder:text-mist/30 focus:border-moss-300 focus:outline-none"
+            className="w-full rounded-lg border border-mist/20 bg-canopy-950/60 px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-moss-300 focus:outline-none"
             aria-label="Jeton administrateur"
             required
           />
           <button type="submit" className="btn btn-primary w-full">
             Se connecter
           </button>
-          <p className="text-[0.65rem] text-mist/40">
+          <p className="text-caption text-ink-muted">
             {expected
               ? "Le jeton est comparé à la variable d'environnement ADMIN_TOKEN."
               : "ADMIN_TOKEN n'est pas défini : accès libre en développement uniquement."}
@@ -79,7 +79,7 @@ export default async function AdminPage({
         <div>
           <p className="eyebrow">Console d&apos;administration</p>
           <h1 className="display text-3xl">Minkébé · tableau de bord</h1>
-          <p className="mt-1 text-xs text-mist/55">
+          <p className="mt-1 text-xs text-ink-muted">
             v{APP_VERSION} · jeu {GAME_VERSION} · build {BUILD_ID} · en ligne depuis{" "}
             {formatUptime(uptimeSeconds())}
           </p>
@@ -98,8 +98,8 @@ export default async function AdminPage({
         ].map((card) => (
           <div key={card.label} className="panel p-4">
             <p className="eyebrow">{card.label}</p>
-            <p className="display mt-1 text-2xl text-parchment">{card.value}</p>
-            <p className="text-[0.65rem] text-mist/45">{card.hint}</p>
+            <p className="display mt-1 text-2xl text-ink">{card.value}</p>
+            <p className="text-caption text-ink-muted">{card.hint}</p>
           </div>
         ))}
       </section>
@@ -107,7 +107,7 @@ export default async function AdminPage({
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="panel p-5">
           <h2 className="display mb-3 text-lg">Base de données</h2>
-          <dl className="space-y-1 text-xs text-mist/70">
+          <dl className="space-y-1 text-xs text-ink-soft">
             <div className="flex justify-between">
               <dt>Mode</dt>
               <dd className={db.mode === "postgres" ? "text-moss-300" : "text-amber-glow"}>{db.mode}</dd>
@@ -121,15 +121,15 @@ export default async function AdminPage({
               <dd>{db.reachable === null ? "non testée" : db.reachable ? "ok" : "échec"}</dd>
             </div>
           </dl>
-          {db.error && <p className="mt-2 text-[0.65rem] text-laterite-400">{db.error}</p>}
+          {db.error && <p className="mt-2 text-caption text-laterite-400">{db.error}</p>}
         </div>
 
         <div className="panel p-5">
           <h2 className="display mb-3 text-lg">Paiements par prestataire</h2>
           {Object.keys(payments.byProvider).length === 0 ? (
-            <p className="text-xs text-mist/50">Aucun paiement enregistré.</p>
+            <p className="text-xs text-ink-muted">Aucun paiement enregistré.</p>
           ) : (
-            <ul className="space-y-1 text-xs text-mist/70">
+            <ul className="space-y-1 text-xs text-ink-soft">
               {Object.entries(payments.byProvider).map(([provider, count]) => (
                 <li key={provider} className="flex justify-between">
                   <span className="capitalize">{provider}</span>
@@ -144,11 +144,11 @@ export default async function AdminPage({
       <section className="panel p-5">
         <h2 className="display mb-3 text-lg">Salons ouverts</h2>
         {rooms.length === 0 ? (
-          <p className="text-xs text-mist/50">Aucun salon actif.</p>
+          <p className="text-xs text-ink-muted">Aucun salon actif.</p>
         ) : (
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="text-[0.6rem] uppercase tracking-wider text-mist/40">
+              <tr className="text-micro uppercase tracking-wider text-ink-muted">
                 <th className="py-1">Code</th>
                 <th className="py-1">Nom</th>
                 <th className="py-1">Joueurs</th>
@@ -158,12 +158,12 @@ export default async function AdminPage({
             <tbody>
               {rooms.map((room) => (
                 <tr key={room.code} className="border-t border-mist/5">
-                  <td className="py-1.5 font-mono text-parchment">{room.code}</td>
-                  <td className="py-1.5 text-mist/70">{room.name}</td>
-                  <td className="py-1.5 tabular-nums text-mist/70">
+                  <td className="py-1.5 font-mono text-ink">{room.code}</td>
+                  <td className="py-1.5 text-ink-soft">{room.name}</td>
+                  <td className="py-1.5 tabular-nums text-ink-soft">
                     {room.players.size}/{room.maxPlayers}
                   </td>
-                  <td className="py-1.5 text-mist/50">
+                  <td className="py-1.5 text-ink-muted">
                     {new Date(room.updatedAt).toLocaleTimeString("fr-FR")}
                   </td>
                 </tr>
@@ -181,20 +181,20 @@ export default async function AdminPage({
             return (
               <li key={pkg.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-mist/5 py-2">
                 <div>
-                  <p className="font-semibold text-parchment">
+                  <p className="font-semibold text-ink">
                     {pkg.icon} {pkg.label}
                   </p>
-                  <p className="text-[0.62rem] text-mist/45">
+                  <p className="text-caption text-ink-muted">
                     {pkg.filename} · {pkg.format} · v{pkg.version}
                   </p>
                 </div>
-                <div className="text-right text-[0.65rem] text-mist/55">
+                <div className="text-right text-caption text-ink-muted">
                   <p>
                     {artifact?.exists
                       ? `${((artifact.sizeBytes ?? 0) / 1024 / 1024).toFixed(1)} Mo`
                       : "archive non générée"}
                   </p>
-                  <p className="font-mono text-[0.58rem] text-mist/35">
+                  <p className="font-mono text-micro text-ink-muted">
                     {artifact?.sha256 ? artifact.sha256.slice(0, 16) : "—"}
                   </p>
                 </div>
@@ -202,7 +202,7 @@ export default async function AdminPage({
             );
           })}
         </ul>
-        <p className="mt-3 text-[0.65rem] text-mist/40">
+        <p className="mt-3 text-caption text-ink-muted">
           Lancez <code className="rounded bg-canopy-900 px-1">npm run package</code> pour produire
           les archives dans public/downloads/.
         </p>

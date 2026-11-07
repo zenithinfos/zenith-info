@@ -93,104 +93,19 @@ async function generateIcons() {
 /* Visuels de menu                                                     */
 /* ------------------------------------------------------------------ */
 
-function forestSvg({ width = 1600, height = 900, palms = false } = {}) {
-  const layers = [];
-  const palette = ["#0d2018", "#122b1e", "#173624", "#1d422a", "#245033"];
-  for (let i = 0; i < 5; i++) {
-    const y = height * (0.42 + i * 0.1);
-    const colour = palette[i];
-    const amplitude = 40 + i * 22;
-    let d = `M0,${height} L0,${y}`;
-    for (let x = 0; x <= width; x += 60) {
-      const wave =
-        Math.sin(x * 0.004 + i * 1.7) * amplitude +
-        Math.sin(x * 0.011 + i * 0.9) * amplitude * 0.45;
-      d += ` L${x},${y + wave}`;
-    }
-    d += ` L${width},${height} Z`;
-    layers.push(`<path d="${d}" fill="${colour}"/>`);
-  }
-
-  const trunks = [];
-  for (let i = 0; i < 26; i++) {
-    const x = (i / 26) * width + (i % 3) * 18;
-    const top = height * (0.16 + ((i * 37) % 20) / 100);
-    const w = 6 + (i % 4) * 3;
-    trunks.push(
-      `<path d="M${x},${height} C${x + 6},${height * 0.7} ${x - 8},${top + 60} ${x + 2},${top}" stroke="#050c08" stroke-width="${w}" fill="none" opacity="${0.35 + (i % 3) * 0.12}"/>`,
-    );
-    const crownY = top - 10;
-    trunks.push(
-      `<ellipse cx="${x + 2}" cy="${crownY}" rx="${46 + (i % 5) * 12}" ry="${26 + (i % 4) * 7}" fill="#0a1a11" opacity="0.75"/>`,
-    );
-  }
-
-  const palmsMarkup = palms
-    ? Array.from({ length: 7 }, (_, i) => {
-        const x = 120 + i * 220;
-        const top = height * 0.3;
-        return `<g opacity="0.8"><path d="M${x},${height} C${x + 18},${height * 0.62} ${x - 10},${top + 80} ${x + 8},${top}" stroke="#08130d" stroke-width="9" fill="none"/>${Array.from(
-          { length: 8 },
-          (_, k) => {
-            const angle = (k / 8) * Math.PI * 2;
-            const ex = x + 8 + Math.cos(angle) * 95;
-            const ey = top + Math.sin(angle) * 46;
-            return `<path d="M${x + 8},${top} Q${(x + 8 + ex) / 2},${top - 34} ${ex},${ey}" stroke="#08130d" stroke-width="5" fill="none" stroke-linecap="round"/>`;
-          },
-        ).join("")}</g>`;
-      }).join("")
-    : "";
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0b1f18"/>
-      <stop offset="42%" stop-color="#2d5a3d"/>
-      <stop offset="68%" stop-color="#b06a37"/>
-      <stop offset="100%" stop-color="#f0b45c"/>
-    </linearGradient>
-    <radialGradient id="sun" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#ffe6a8" stop-opacity="0.95"/>
-      <stop offset="55%" stop-color="#f2b544" stop-opacity="0.35"/>
-      <stop offset="100%" stop-color="#f2b544" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="haze"><feGaussianBlur stdDeviation="18"/></filter>
-  </defs>
-  <rect width="${width}" height="${height}" fill="url(#sky)"/>
-  <circle cx="${width * 0.62}" cy="${height * 0.52}" r="${height * 0.34}" fill="url(#sun)"/>
-  <g filter="url(#haze)" opacity="0.55">
-    <ellipse cx="${width * 0.28}" cy="${height * 0.52}" rx="${width * 0.36}" ry="${height * 0.07}" fill="#cbd9c8"/>
-    <ellipse cx="${width * 0.75}" cy="${height * 0.46}" rx="${width * 0.3}" ry="${height * 0.05}" fill="#cbd9c8"/>
-  </g>
-  ${layers.join("")}
-  ${trunks.join("")}
-  ${palmsMarkup}
-</svg>`;
-}
-
-async function generateMenuImages() {
-  const dir = await ensureDir("images");
-
-  const forest = path.join(dir, "menu-forest.jpg");
-  if (force || !existsSync(forest)) {
-    await sharp(Buffer.from(forestSvg({ width: 1600, height: 900 })))
-      .jpeg({ quality: 82, mozjpeg: true })
-      .toFile(forest);
-    console.log("✓ images/menu-forest.jpg");
-  } else {
-    console.log("· images/menu-forest.jpg existe déjà");
-  }
-
-  const palms = path.join(dir, "menu-palms.jpg");
-  if (force || !existsSync(palms)) {
-    await sharp(Buffer.from(forestSvg({ width: 1600, height: 900, palms: true })))
-      .jpeg({ quality: 82, mozjpeg: true })
-      .toFile(palms);
-    console.log("✓ images/menu-palms.jpg");
-  } else {
-    console.log("· images/menu-palms.jpg existe déjà");
-  }
-}
+/**
+ * Les images de décor ne sont **plus** dessinées en SVG.
+ *
+ * `forestSvg` produisait une forêt de traits et d'ellipses : des troncs en
+ * bézier et des houppes en médaillons, c'est-à-dire exactement des lampadaires
+ * verticaux. C'était un décor de remplacement, et il se voyait.
+ *
+ * L'image du héros est désormais un rendu du moteur — le même sous-bois que
+ * celui du jeu, avec ses vraies textures et ses vrais arbres — et les anciennes
+ * images sont supprimées. Ce générateur n'a donc plus rien à produire, et il
+ * est retiré pour qu'un `npm run assets` ne puisse pas remettre les lampadaires
+ * par-dessus un rendu correct.
+ */
 
 /* ------------------------------------------------------------------ */
 /* Textures                                                            */
@@ -576,7 +491,6 @@ async function generateAudio() {
 async function main() {
   console.log("Génération des assets Minkébé…\n");
   await generateIcons();
-  await generateMenuImages();
   await generateForestTextures();
   await generateModels();
   await generateAudio();

@@ -48,10 +48,10 @@ export default function LoadingScreen({
       </div>
 
       <div className="space-y-2">
-        <p className="display text-2xl text-parchment">
+        <p className="display text-2xl text-ink">
           {done ? "La forêt est prête." : "Entrée dans la réserve"}
         </p>
-        <p className="text-sm text-mist/70">{label ?? STEPS[step]}</p>
+        <p className="text-sm text-ink-soft">{label ?? STEPS[step]}</p>
       </div>
 
       <div className="w-full max-w-sm">
@@ -67,10 +67,10 @@ export default function LoadingScreen({
             style={{ width: `${value}%` }}
           />
         </div>
-        <p className="mt-2 text-xs tabular-nums text-mist/50">{value} %</p>
+        <p className="mt-2 text-xs tabular-nums text-ink-muted">{value} %</p>
       </div>
 
-      <p className="max-w-md text-xs leading-relaxed text-mist/45">
+      <p className="max-w-md text-xs leading-relaxed text-ink-muted">
         Astuce : casque recommandé. La forêt se découvre aussi à l&apos;oreille — les cris
         d&apos;éléphants portent à plus d&apos;un kilomètre.
       </p>

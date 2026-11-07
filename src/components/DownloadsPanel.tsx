@@ -88,17 +88,17 @@ export default function DownloadsPanel({ compact = false }: { compact?: boolean 
           <h2 id="telecharger-titre" className="display text-2xl">
             {t("dl.title")}
           </h2>
-          <p className="mt-1 max-w-lg text-xs text-mist/60">
+          <p className="mt-1 max-w-lg text-xs text-ink-muted">
             {t("dl.version")} {current.version} · {current.format} ·{" "}
             {formatBytes(current.sizeBytes, locale)}
-            {loading && <span className="ml-2 text-mist/35">({t("dl.updating")})</span>}
+            {loading && <span className="ml-2 text-ink-muted">({t("dl.updating")})</span>}
           </p>
         </div>
         <a
           href="/api/download"
           target="_blank"
           rel="noreferrer"
-          className="text-[0.7rem] text-moss-300 underline-offset-4 hover:underline"
+          className="text-caption text-moss-300 underline-offset-4 hover:underline"
         >
           {t("dl.json")}
         </a>
@@ -122,12 +122,12 @@ export default function DownloadsPanel({ compact = false }: { compact?: boolean 
             />
             <div className="relative">
               <span className="text-xl">{pkg.icon}</span>
-              <p className="mt-1 text-sm font-semibold text-parchment">{pkg.label}</p>
-              <p className="text-[0.65rem] text-mist/55">
+              <p className="mt-1 text-sm font-semibold text-ink">{pkg.label}</p>
+              <p className="text-caption text-ink-muted">
                 {pkg.format} · {formatBytes(pkg.sizeBytes, locale)}
               </p>
               {pkg.kind === "server" && (
-                <span className="mt-1 inline-block rounded-full bg-amber-glow/15 px-2 py-0.5 text-[0.58rem] uppercase tracking-wider text-amber-glow">
+                <span className="mt-1 inline-block rounded-full bg-amber-glow/15 px-2 py-0.5 text-micro uppercase tracking-wider text-amber-glow">
                   {t("dl.hostBadge")}
                 </span>
               )}
@@ -142,10 +142,10 @@ export default function DownloadsPanel({ compact = false }: { compact?: boolean 
             <p className="eyebrow mb-2">
               {current.kind === "server" ? t("dl.hosting") : t("dl.install")}
             </p>
-            <ol className="space-y-1.5 text-xs text-mist/70">
+            <ol className="space-y-1.5 text-xs text-ink-soft">
               {current.instructions.map((instruction, index) => (
                 <li key={instruction} className="flex gap-2">
-                  <span className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full bg-moss-400/20 text-[0.55rem] text-moss-300">
+                  <span className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full bg-moss-400/20 text-micro text-moss-300">
                     {index + 1}
                   </span>
                   <span>{instruction}</span>
@@ -163,27 +163,27 @@ export default function DownloadsPanel({ compact = false }: { compact?: boolean 
             </div>
           </div>
 
-          <div className="rounded-xl border border-mist/12 bg-canopy-950/45 p-4 text-xs text-mist/70">
+          <div className="rounded-xl border border-mist/12 bg-canopy-950/45 p-4 text-xs text-ink-soft">
             <p className="eyebrow mb-2">{t("dl.requirements")}</p>
             <p className="mb-3">{current.requirements}</p>
 
             <p className="eyebrow mb-2">{t("dl.integrity")}</p>
             {current.sha256 ? (
-              <code className="block break-all rounded-lg bg-canopy-900/80 p-2 text-[0.62rem] text-mist/60">
+              <code className="block break-all rounded-lg bg-canopy-900/80 p-2 text-caption text-ink-muted">
                 sha256:{current.sha256}
               </code>
             ) : (
-              <p className="text-[0.65rem] text-mist/45">{t("dl.notBuilt")}</p>
+              <p className="text-caption text-ink-muted">{t("dl.notBuilt")}</p>
             )}
 
-            <p className="mt-3 text-[0.65rem] text-mist/45">
+            <p className="mt-3 text-caption text-ink-muted">
               {current.kind === "server" ? t("dl.noteServer") : t("dl.noteClient")}
             </p>
           </div>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-mist/10 pt-3 text-[0.65rem] text-mist/45">
+      <div className="flex flex-wrap items-center gap-2 border-t border-mist/10 pt-3 text-caption text-ink-muted">
         <span>{t("dl.ios")}</span>
         <span>·</span>
         <span>{t("dl.browsers")}</span>
