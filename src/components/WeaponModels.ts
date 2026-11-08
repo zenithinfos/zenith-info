@@ -58,28 +58,102 @@ function woodMaterial(): THREE.MeshStandardMaterial {
   });
 }
 
-/** Lame extrudée à partir d'un profil, orientée vers l'avant (-Z). */
+/**
+ * Une lame n'est pas une feuille de saule.
+ *
+ * Le profil précédent était symétrique — deux courbes en miroir, larges au
+ * milieu, pointues aux deux bouts. Vue de profil, il donnait exactement une
+ * feuille : aucune arête de dos, aucun tranchant, aucune pointe. Une lame a
+ * trois lignes et elles ne se ressemblent pas :
+ *
+ *   · le **dos**, droit ou à peine convexe, qui porte toute la rigidité ;
+ *   · le **tranchant**, qui part du ricasso et se relève vers la pointe ;
+ *   · la **pointe**, dans l'axe, qui est le point de percement.
+ *
+ * On construit donc le contour par points, dans un repère où Z va vers la
+ * pointe. Le dos est à +Y, le tranchant à −Y, l'épaisseur en X.
+ */
 function blade(
   length: number,
   width: number,
   thickness: number,
   material: THREE.Material,
-  curve = 0,
+  options: {
+    /** Hauteur du dos à la garde, en fraction de la largeur. */
+    spineRise?: number;
+    /** Épaule : largeur maximale, en fraction de la longueur. */
+    shoulder?: number;
+    /** Courbure du dos : 0 = droit (machette), > 0 = ventru (coupe-coupe). */
+    belly?: number;
+    /** Le dos reste-t-il haut jusqu'aux trois quarts ? (machette) */
+    squareSpine?: boolean;
+  } = {},
 ): THREE.Mesh {
+  const { spineRise = 0.55, shoulder = 0.78, belly = 0, squareSpine = false } = options;
+  const half = width / 2;
+
   const shape = new THREE.Shape();
-  shape.moveTo(0, 0);
-  shape.quadraticCurveTo(width * 0.55, -length * 0.35, width * 0.42, -length * 0.82);
-  shape.quadraticCurveTo(width * 0.3, -length * 0.95, curve, -length);
-  shape.quadraticCurveTo(-width * 0.36, -length * 0.86, -width * 0.5, -length * 0.3);
-  shape.quadraticCurveTo(-width * 0.5, -length * 0.05, 0, 0);
+  // Un couteau s'affine sur toute sa longueur ; une machette garde sa hauteur
+  // de dos jusqu'aux trois quarts et ne perd tout qu'à la pointe. Sans cette
+  // distinction, la machette avait la ligne d'un couteau de cuisine.
+  const taper = (t: number) =>
+    squareSpine ? Math.max(0, 1 - Math.pow(Math.max(0, t - 0.55) / 0.45, 1.5)) : Math.max(0, 1 - Math.pow(t, 2.4));
+
+  // Dos : de la garde vers la pointe, droit ou ventru, puis il pique vers
+  // l'axe sur le dernier cinquième — c'est là que se forme la pointe.
+  shape.moveTo(0, half * spineRise);
+  const spinePoints = 10;
+  for (let i = 1; i <= spinePoints; i += 1) {
+    const t = i / spinePoints;
+    const z = -length * t;
+    const bellyArc = Math.sin(Math.PI * Math.pow(t, 0.85)) * belly * half;
+    shape.lineTo(z, half * spineRise * taper(t) + bellyArc * taper(t));
+  }
+
+  // Pointe : courte, dans l'axe. Une pointe arrondie sur douze centimètres
+  // fait un couteau à beurre ; ici elle se referme sur 3 % de la longueur.
+  const tip = -length;
+  shape.lineTo(tip, 0);
+
+  // Tranchant : du voisinage de la pointe vers le ricasso. Il part de l'axe,
+  // bombe au premier tiers, puis rejoint la garde — c'est cette courbe qui
+  // distingue une lame d'un losange.
+  //
+  // Le sens de la montée compte : la largeur est **nulle à la pointe** et
+  // **pleine à la garde**. La première version la faisait croître avec t, donc
+  // avec la distance à la garde : la lame s'arrêtait net sur une arête
+  // verticale, à la place de la pointe.
+  const edgePoints = 12;
+  for (let i = edgePoints - 1; i >= 0; i -= 1) {
+    const t = i / edgePoints;
+    const z = -length * t;
+    const rise = 0.04 + 0.96 * Math.pow(Math.min(1, (1 - t) / shoulder), 0.62);
+    shape.lineTo(z, -half * rise);
+  }
+  shape.lineTo(0, half * spineRise);
+
   const geometry = new THREE.ExtrudeGeometry(shape, {
     depth: thickness,
     bevelEnabled: true,
-    bevelSize: thickness * 0.6,
-    bevelThickness: thickness * 0.6,
-    bevelSegments: 1,
+    // Le biseau donne son arête au tranchant ; sans lui la lame est une plaque
+    // d'épaisseur constante. Mais il **arrondit aussi la pointe** : réglé à
+    // 1,6 fois l'épaisseur, il la tronquait sur six millimètres — un couteau à
+    // beurre. À 0,45 fois, il tient l'arête et laisse la pointe percer.
+    bevelSize: Math.min(thickness * 0.45, width * 0.06),
+    bevelThickness: thickness * 0.45,
+    bevelSegments: 2,
+    curveSegments: 10,
   });
-  geometry.rotateX(Math.PI / 2);
+  // Repère : le contour est dessiné dans le plan XY (x = longueur, négative ;
+  // y = largeur) et extrudé sur Z (épaisseur). Il faut donc amener x → −Z et
+  // z → X. `rotateY(−π/2)` fait exactement cela : (x, y, z) → (−z, y, x).
+  //
+  // La rotation précédente était `rotateX(π/2)`, qui envoyait la **largeur**
+  // sur Z et l'**épaisseur** sur Y : la lame se retrouvait couchée en travers
+  // de son manche, et l'on voyait une aiguille plantée dans une garde.
+  geometry.rotateY(-Math.PI / 2);
+  geometry.translate(thickness / 2, 0, 0);
+  geometry.computeVertexNormals();
   return new THREE.Mesh(geometry, material);
 }
 
@@ -177,73 +251,179 @@ function m16(): { group: THREE.Group; materials: THREE.Material[] } {
   return { group, materials: [steel, polymer] };
 }
 
+/**
+ * Couteau de camp et machette.
+ *
+ * Les proportions venaient d'un tube en bois prolongé par une aiguille. Un
+ * couteau de camp tient dans une main : manche de **11 cm**, lame de **16 cm**
+ * pour 3,8 de large, garde courte et pommeau large pour que la main bute en
+ * frappant. Une machette ne se tient pas de la même façon : manche de 15 cm,
+ * lame de 43 cm, **dos de 4 mm** mais une largeur qui va chercher 7,5 cm —
+ * c'est sa masse en bout qui coupe, pas son tranchant seul.
+ */
 function edged(machete: boolean): { group: THREE.Group; materials: THREE.Material[] } {
   const group = new THREE.Group();
-  const wood = woodMaterial();
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0x9aa0a4,
-    roughness: 0.22,
-    metalness: 0.95,
-    envMapIntensity: 1.1,
-  });
-  const dark = steelMaterial();
 
+  // Le bois de poignée : veiné, mat, jamais noir. Un manche noir sous un
+  // éclairage de forêt devient une silhouette pleine.
+  const wood = new THREE.MeshStandardMaterial({
+    color: machete ? 0x6b4526 : 0x4a2f1c,
+    roughness: 0.68,
+    metalness: 0.02,
+  });
+  // L'acier : clair, très métallique, et surtout **usé** — la patine par sommet
+  // n'existe pas sur les armes, on la simule donc par deux teintes : l'acier
+  // du corps et celui, plus sombre, du plat de lame.
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0xb9c0c4,
+    roughness: 0.3,
+    metalness: 0.88,
+    envMapIntensity: 1.15,
+  });
+  const dull = new THREE.MeshStandardMaterial({
+    color: 0x6e767a,
+    roughness: 0.52,
+    metalness: 0.7,
+  });
+  const brass = new THREE.MeshStandardMaterial({
+    color: 0x8a6a34,
+    roughness: 0.42,
+    metalness: 0.85,
+  });
+
+  const handleLength = machete ? 0.15 : 0.11;
+  const handleRadius = machete ? 0.0165 : 0.0145;
+
+  // Manche : fuselé, plus large au pommeau qu'à la garde. Un manche cylindrique
+  // glisse dans une main qui frappe ; un manche qui s'évase tient tout seul.
   const handle = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.019, 0.022, machete ? 0.15 : 0.115, 8),
+    new THREE.CylinderGeometry(handleRadius * 0.92, handleRadius * 1.18, handleLength, 10),
     wood,
   );
   handle.rotation.x = Math.PI / 2;
-  handle.position.set(0, -0.02, 0.02);
+  handle.position.set(0, -0.018, handleLength / 2);
   group.add(handle);
 
-  const pommel = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.012, 8), dark);
+  // Trois rainures d'adhérence. Fines : un tore de 2,2 mm de rayon sur un
+  // manche de 14 faisait des perles enfilées. À 1,1 mm, c'est une rayure.
+  for (let i = 0; i < 3; i += 1) {
+    const groove = new THREE.Mesh(
+      new THREE.TorusGeometry(handleRadius * 1.0, 0.0011, 4, 14),
+      new THREE.MeshStandardMaterial({ color: 0x2e1c10, roughness: 0.88, metalness: 0.04 }),
+    );
+    groove.position.set(0, -0.018, 0.03 + i * (handleLength * 0.26));
+    group.add(groove);
+  }
+
+  // Pommeau : plus large que le manche, il empêche la main de glisser.
+  const pommel = new THREE.Mesh(
+    new THREE.CylinderGeometry(handleRadius * 1.35, handleRadius * 1.1, 0.014, 10),
+    brass,
+  );
   pommel.rotation.x = Math.PI / 2;
-  pommel.position.set(0, -0.02, 0.09);
+  pommel.position.set(0, -0.018, handleLength + 0.004);
   group.add(pommel);
 
-  const guard = new THREE.Mesh(
-    new THREE.BoxGeometry(machete ? 0.03 : 0.02, machete ? 0.012 : 0.014, 0.012),
-    dark,
-  );
-  guard.position.set(0, -0.012, -0.055);
+  // Garde : une platine qui affleure la largeur de la lame, pas une barre
+  // transversale. Réglée plus large que la lame, elle dépassait sous le
+  // ricasso et se lisait comme une cale grise collée au manche.
+  // Après la rotation de la lame, l'**épaisseur** est sur X et la **largeur**
+  // sur Y. Une garde taillée en largeur sur X se lisait comme une cale grise
+  // dix fois plus épaisse que la lame.
+  const bladeWidth = machete ? 0.075 : 0.038;
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.0085, bladeWidth * 0.9, 0.01), dull);
+  guard.position.set(0, -0.018 + (machete ? 0.006 : 0.003), -0.008);
   group.add(guard);
 
   const bladeMesh = blade(
-    machete ? 0.52 : 0.27,
+    machete ? 0.43 : 0.16,
     machete ? 0.075 : 0.038,
-    machete ? 0.005 : 0.004,
+    machete ? 0.0042 : 0.0036,
     steel,
-    machete ? 0.03 : 0,
+    machete
+      ? { spineRise: 0.72, shoulder: 0.9, belly: 0.06, squareSpine: true }
+      : { spineRise: 0.5, shoulder: 0.72, belly: 0.05 },
   );
-  bladeMesh.position.set(0, -0.018, machete ? -0.06 : -0.048);
-  bladeMesh.rotation.x = machete ? 0.12 : 0.06;
+  bladeMesh.position.set(0, -0.018, -0.012);
   group.add(bladeMesh);
 
-  return { group, materials: [wood, steel, dark] };
+  return { group, materials: [wood, steel, dull, brass] };
 }
 
+/**
+ * Lance de chasse.
+ *
+ * Deux mètres et sept de long, comme un vrai épieu de chasse : la hampe fait
+ * 1,95 m, la pointe 26 cm. La hampe s'affine vers l'avant, le liage est en
+ * cuir, et une **vire** — un anneau de métal — empêche le bois de se fendre à
+ * l'impact. C'était ce qui manquait : une tige et un cône.
+ */
 function spear(): { group: THREE.Group; materials: THREE.Material[] } {
   const group = new THREE.Group();
-  const wood = woodMaterial();
-  const steel = steelMaterial(0x777d80);
-  const bindingMaterial = steelMaterial(0x3b2a18);
 
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.014, 1.9, 8), wood);
+  const wood = new THREE.MeshStandardMaterial({
+    color: 0x7a5433,
+    roughness: 0.72,
+    metalness: 0.02,
+  });
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0x9aa4a8,
+    roughness: 0.34,
+    metalness: 0.86,
+    envMapIntensity: 1.1,
+  });
+  const leather = new THREE.MeshStandardMaterial({ color: 0x3a2717, roughness: 0.82, metalness: 0.04 });
+  const iron = new THREE.MeshStandardMaterial({ color: 0x4a4f52, roughness: 0.5, metalness: 0.8 });
+
+  // Hampe : 1,70 m, dont 35 cm **derrière** la main. Une lance de deux mètres
+  // dont le bois part du point de prise vers l'arrière traversait la caméra en
+  // vue subjective ; la queue doit rester courte.
+  const shaftLength = 1.7;
+  const rear = 0.35;
+  const shaftFront = -shaftLength + rear;
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.0125, 0.0155, shaftLength, 10),
+    wood,
+  );
   shaft.rotation.x = Math.PI / 2;
-  shaft.position.set(0, -0.01, -0.62);
+  shaft.position.set(0, -0.01, rear - shaftLength / 2);
   group.add(shaft);
 
-  const head = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.16, 8), steel);
-  head.rotation.x = -Math.PI / 2;
-  head.position.set(0, -0.01, -1.66);
+  // Pointe : une lame d'estoc à deux tranchants, pas un cône. Un cône ne
+  // perce pas, il rebondit — et visuellement il fait « jouet ».
+  const head = blade(0.24, 0.05, 0.005, steel, { spineRise: 0.5, shoulder: 0.55, belly: 0 });
+  head.position.set(0, -0.01, shaftFront - 0.004);
   group.add(head);
 
-  const binding = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.06, 8), bindingMaterial);
-  binding.rotation.x = Math.PI / 2;
-  binding.position.set(0, -0.01, -1.55);
-  group.add(binding);
+  // Douille : le métal qui enveloppe le bois sur 12 cm.
+  const socket = new THREE.Mesh(new THREE.CylinderGeometry(0.0165, 0.0145, 0.12, 10), steel);
+  socket.rotation.x = Math.PI / 2;
+  socket.position.set(0, -0.01, shaftFront + 0.06);
+  group.add(socket);
 
-  return { group, materials: [wood, steel, bindingMaterial] };
+  // Liage de cuir : sur la douille, et au point de prise.
+  for (const [z, length] of [
+    [shaftFront + 0.1, 0.07],
+    [-0.34, 0.09],
+  ] as const) {
+    const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.0165, 0.0165, length, 10), leather);
+    wrap.rotation.x = Math.PI / 2;
+    wrap.position.set(0, -0.01, z);
+    group.add(wrap);
+  }
+
+  // Vire : l'anneau de fer qui empêche le bois d'éclater à l'impact.
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.017, 0.0035, 5, 12), iron);
+  collar.position.set(0, -0.01, shaftFront + 0.14);
+  group.add(collar);
+
+  // Talon : un embout de fer à l'autre bout, pour la marche et pour frapper.
+  const butt = new THREE.Mesh(new THREE.ConeGeometry(0.0165, 0.05, 10), iron);
+  butt.rotation.x = -Math.PI / 2;
+  butt.position.set(0, -0.01, rear + 0.025);
+  group.add(butt);
+
+  return { group, materials: [wood, steel, leather, iron] };
 }
 
 /** Fusil à pompe : canon long, tube sous le canon, bois clair. */
@@ -313,20 +493,27 @@ const GRIPS: Record<WeaponId, { muzzle: THREE.Vector3Tuple; grip: THREE.Vector3T
     grip: [0, -0.05, 0.03],
     fore: [0, 0.0, -0.26],
   },
+  // Les points de prise suivent la géométrie réelle, et ils sont **mesurés**
+  // sur la boîte englobante de chaque arme (voir `scripts/preview-blades.mjs`) :
+  // une bouche de canon à 58 cm sur une machette de 43 cm faisait partir
+  // l'éclair au-delà de la pointe, et les mains se posaient à côté du manche.
+  //
+  // La pointe dépasse la longueur demandée à `blade()` : le biseau ajoute son
+  // épaisseur en bout. D'où −0,174 et non −0,172, et −1,597 pour la lance.
   couteau: {
-    muzzle: [0, -0.02, -0.32],
-    grip: [0, -0.02, 0.03],
+    muzzle: [0, -0.018, -0.174],
+    grip: [0, -0.018, 0.03],
     fore: null,
   },
   machette: {
-    muzzle: [0, -0.02, -0.58],
-    grip: [0, -0.02, 0.03],
+    muzzle: [0, -0.018, -0.445],
+    grip: [0, -0.018, 0.03],
     fore: null,
   },
   lance: {
-    muzzle: [0, -0.01, -1.74],
+    muzzle: [0, -0.01, -1.597],
     grip: [0, -0.01, 0.0],
-    fore: [0, -0.01, -0.44],
+    fore: [0, -0.01, -0.4],
   },
 };
 
