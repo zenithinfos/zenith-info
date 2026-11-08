@@ -160,6 +160,8 @@ export default function MinkebeGame() {
   // --- chasse
   const animalsRef = useRef<Animal[]>([]);
   const huntRef = useRef<HuntState>(initialHunt());
+  /** Tenue actuellement portée par le corps 3D : on ne la réapplique qu'au changement. */
+  const outfitRef = useRef("explorateur");
   const lastShotRef = useRef(0);
   const firingRef = useRef(false);
   const fireRef = useRef<() => void>(() => {});
@@ -647,6 +649,20 @@ export default function MinkebeGame() {
 
       // Mewas : le rendu reçoit l'instantané des esprits.
       if (controller) controller.setMewas(result.state.mewas);
+      // Plants à fruits : ce qu'il reste sur chaque plante, cueillette comprise.
+      if (controller) controller.setFruits(result.state.foragePlants);
+      if (controller && result.state.player.outfit !== outfitRef.current) {
+        outfitRef.current = result.state.player.outfit;
+        controller.setOutfit(result.state.player.outfit);
+      }
+
+      for (const pick of result.picked) {
+        pushToast({
+          title: `🍈 ${pick.name}`,
+          detail: `${t("game.eat")} · ${result.state.fruits} ${t("game.fruits")}`,
+          tone: "info",
+        });
+      }
 
       for (const reward of result.mewas) {
         pushToast({
@@ -1156,6 +1172,8 @@ export default function MinkebeGame() {
               controller.setWeapon(huntRef.current.arsenal.current);
               controller.setAnimals(animalsRef.current);
               controller.setMewas(stateRef.current.mewas);
+              controller.setFruits(stateRef.current.foragePlants);
+              controller.setOutfit(stateRef.current.player.outfit);
               controller.setView(view);
             }}
             onError={(message) =>

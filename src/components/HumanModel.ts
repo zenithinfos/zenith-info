@@ -22,6 +22,7 @@ import { SKIN_BASE, SKIN_MAP_TINT, SKIN_SHADE, SKIN_SHEEN } from "@/game/appeara
 import { type WeaponId } from "@/game/hunting";
 import { HUMAN_HOLD } from "@/game/holds";
 import { createWeaponModel, disposeWeaponModel, type WeaponModel } from "./WeaponModels";
+import { getOutfit } from "@/game/outfits";
 
 /**
  * Proportions d'un homme de 1,76 m.
@@ -1725,6 +1726,59 @@ export function setHumanWeapon(rig: HumanRig, id: WeaponId): void {
   rig.weaponHolder.add(model.group);
   rig.weapon = model;
   rig.weaponId = id;
+}
+
+/**
+ * Applique une tenue au corps.
+ *
+ * Les matières portent des noms — « chemise », « pantalon », « bottes »,
+ * « sangle » — précisément pour qu'on puisse les retrouver ici. Une tenue qui
+ * ne change que des statistiques n'est pas visible : le joueur choisit un
+ * uniforme d'écogarde, et c'est le même homme en chemise kaki qui repart.
+ *
+ * Les couleurs viennent de `outfits.ts` et sont choisies contre la peau : la
+ * carnation est sombre et chaude, donc l'étoffe est soit nettement plus claire
+ * et plus froide, soit franchement plus sombre. Une tenue de la même valeur
+ * que le corps redevient un corps.
+ */
+export function applyHumanOutfit(rig: HumanRig, outfitId: string): void {
+  const palette = getOutfit(outfitId).palette;
+  const shade = (hex: string, factor: number) =>
+    new THREE.Color(hex).multiplyScalar(factor).getHex();
+
+  // nom de matière → couleur. Les variantes « -ombre » sont la version passée
+  // au brou de noix de la même étoffe : col, poches, revers.
+  const table: Record<string, THREE.ColorRepresentation> = {
+    chemise: palette.top,
+    "chemise-ombre": shade(palette.top, 0.62),
+    pantalon: palette.bottom,
+    "pantalon-ombre": shade(palette.bottom, 0.7),
+    bottes: palette.boot,
+    sangle: palette.gear,
+    sac: shade(palette.gear, 0.72),
+    chapeau: shade(palette.gear, 1.06),
+  };
+
+  for (const material of rig.materials) {
+    const colour = table[material.name];
+    if (!colour) continue;
+    const cloth = material as THREE.MeshStandardMaterial;
+    cloth.color.set(colour);
+    // La pastille de couleur mémorisée suit : sans ça, un aperçu qui lit
+    // `userData.swatch` (parce que la couleur d'une matière ne se relit pas
+    // sans son éclairage) affiche toujours la tenue d'origine — les dix tenues
+    // sortaient identiques.
+    material.userData.swatch = new THREE.Color(colour);
+    // Le cuir garde son vernis ; une étoffe tissée de fils prend une légère
+    // transparence de surface. Ce n'est pas un plastique qui brille.
+    const isBoot = material.name === "bottes";
+    cloth.roughness = isBoot ? 0.55 : 0.94 - palette.sheen * 0.22;
+    if ("sheen" in cloth) {
+      const physical = cloth as THREE.MeshPhysicalMaterial;
+      physical.sheen = isBoot ? 0.1 : palette.sheen * 0.55;
+      physical.sheenColor.set(palette.top).lerp(new THREE.Color(0xffffff), 0.4);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

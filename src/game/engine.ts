@@ -25,6 +25,14 @@ import {
 } from "./realism";
 import { moveWalker } from "./collision";
 import { initialArsenalState, type ArsenalState } from "./hunting";
+import {
+  FRUIT_KINDS,
+  FRUIT_SPECIES,
+  type ForagePick,
+  type FruitPlant,
+  spawnFruitPlants,
+  stepForage,
+} from "./forage";
 import { type MewaReward, type MewaState, mewasFound, spawnMewas, stepMewas } from "./mewas";
 import { waterDepthAt } from "./water";
 import {
@@ -99,10 +107,16 @@ export interface GameState {
   /** Expérience et points de style gagnés en explorant. */
   xp: number;
   style: number;
-  /** Fruits cueillis en marchant. */
+  /** Fruits portés au sac. */
   fruits: number;
-  /** Avancement de la cueillette en cours (0-1). */
-  forage: number;
+  /**
+   * Les plants à fruits de la forêt.
+   *
+   * Il n'y avait pas de plants : l'engine donnait un fruit toutes les seize
+   * secondes de marche, sans rien à cueillir. Le compteur montait, le joueur ne
+   * voyait jamais un fruit — et il avait raison de le dire.
+   */
+  foragePlants: FruitPlant[];
   /** Avancement du ramassage de bois mort (0-1). */
   woodForage: number;
   /** Tenues tissées avec des Fils de Rêve. */
@@ -182,7 +196,7 @@ export function newGame(characterId = "mbadinga"): GameState {
     xp: 0,
     style: 0,
     fruits: 2,
-    forage: 0,
+    foragePlants: spawnFruitPlants(Math.floor(Math.random() * 2 ** 31), DEFAULT_START.position),
     woodForage: 0,
     woven: [],
     death: null,
@@ -232,6 +246,8 @@ export interface StepResult {
   completedLevel: GameLevel | null;
   /** Mewas ramassés pendant ce pas de temps. */
   mewas: MewaReward[];
+  /** Fruits cueillis sur les plants pendant ce pas de temps. */
+  picked: (ForagePick & { name: string })[];
   /** Fin d'expédition déclenchée pendant ce pas de temps. */
   death: DeathState | null;
 }
@@ -248,6 +264,7 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
       warnings: [],
       completedLevel: null,
       mewas: [],
+      picked: [],
       death: null,
     };
   }
@@ -270,6 +287,7 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
       warnings: [],
       completedLevel: null,
       mewas: [],
+      picked: [],
       death: dead.death,
     };
   }
@@ -393,6 +411,7 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
   });
 
   const observations: Species[] = [];
+  const picked: (ForagePick & { name: string })[] = [];
   for (const species of present) {
     if (next.observedSpecies.includes(species.id)) continue;
     // Observation : il faut être discret et à portée d'œil.
@@ -418,13 +437,19 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
   }
   if (mewaStep.collected.length) next.mewas = [...next.mewas];
 
-  // --- Cueillette : les fruits se ramassent en marchant.
-  if (next.player.motion !== "idle" && !atCamp(next) && next.fruits < 8) {
-    next.forage = Math.min(1, next.forage + dt / 16);
-    if (next.forage >= 1) {
-      next.forage = 0;
-      next.fruits += 1;
-    }
+  // --- Cueillette : on prend les fruits sur les plantes, au contact.
+  const forage = stepForage(
+    next.foragePlants,
+    { x: next.player.position[0], z: next.player.position[2] },
+    dt,
+    next.fruits,
+  );
+  next.foragePlants = forage.plants;
+  if (forage.picked.length) next.fruits += forage.picked.length;
+  for (const pick of forage.picked) {
+    const kind = FRUIT_KINDS[pick.species];
+    next.xp += 3;
+    picked.push({ ...pick, name: kind.name });
   }
 
   // --- Bois mort : il traîne partout, il suffit de se baisser.
@@ -479,6 +504,7 @@ export function step(state: GameState, input: InputState, dt: number): StepResul
     warnings,
     completedLevel: advanced.completed,
     mewas: mewaStep.collected,
+    picked,
     death,
   };
 }
@@ -795,7 +821,15 @@ export function serialize(state: GameState): Record<string, unknown> {
     xp: state.xp,
     style: state.style,
     fruits: state.fruits,
-    forage: Math.round(state.forage * 100) / 100,
+    foragePlants: state.foragePlants.map((plant) => ({
+      ...plant,
+      x: Math.round(plant.x * 10) / 10,
+      z: Math.round(plant.z * 10) / 10,
+      y: Math.round(plant.y * 100) / 100,
+      regrow: Math.round(plant.regrow * 10) / 10,
+      turn: Math.round(plant.turn * 100) / 100,
+      phase: Math.round(plant.phase * 100) / 100,
+    })),
     wood: state.wood,
     woodForage: Math.round(state.woodForage * 100) / 100,
     shelters: state.shelters,
@@ -851,7 +885,7 @@ export function deserialize(raw: Record<string, unknown>): GameState {
     xp: typeof raw.xp === "number" ? raw.xp : 0,
     style: typeof raw.style === "number" ? raw.style : 0,
     fruits: typeof raw.fruits === "number" ? raw.fruits : base.fruits,
-    forage: typeof raw.forage === "number" ? raw.forage : 0,
+    foragePlants: deserializeFruitPlants(raw.foragePlants, base),
     wood: typeof raw.wood === "number" ? raw.wood : 0,
     woodForage: typeof raw.woodForage === "number" ? raw.woodForage : 0,
     shelters: Array.isArray(raw.shelters)
@@ -880,6 +914,32 @@ function deserializeMewas(raw: unknown, base: GameState): MewaState[] {
       phase: Number(entry.phase) || 0,
     }));
   return parsed.length ? parsed : base.mewas;
+}
+
+/**
+ * Relit les plants.
+ *
+ * Une save d'avant les plants n'en contient pas : on garde alors ceux de la
+ * base, c'est-à-dire une forêt neuve, plutôt qu'une forêt sans fruits.
+ */
+function deserializeFruitPlants(raw: unknown, base: GameState): FruitPlant[] {
+  if (!Array.isArray(raw)) return base.foragePlants;
+  const parsed = raw
+    .filter((entry): entry is Partial<FruitPlant> => Boolean(entry) && typeof entry === "object")
+    .map((entry, index) => ({
+      id: typeof entry.id === "number" ? entry.id : index,
+      species: FRUIT_SPECIES.includes(entry.species as FruitPlant["species"])
+        ? (entry.species as FruitPlant["species"])
+        : "odika",
+      x: Number(entry.x) || 0,
+      z: Number(entry.z) || 0,
+      y: Number(entry.y) || 0,
+      ripe: typeof entry.ripe === "number" ? Math.max(0, Math.round(entry.ripe)) : 2,
+      regrow: Number(entry.regrow) || 0,
+      turn: Number(entry.turn) || 0,
+      phase: Number(entry.phase) || 0,
+    }));
+  return parsed.length ? parsed : base.foragePlants;
 }
 
 function deserializeDeath(raw: unknown): DeathState | null {

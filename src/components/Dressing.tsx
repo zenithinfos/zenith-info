@@ -127,11 +127,21 @@ export default function Dressing({
                   className="flex w-full items-center gap-3 px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40"
                   aria-pressed={outfit === item.id}
                 >
+                  {/*
+                    Le nuancier montre les **vraies** couleurs de la tenue —
+                    celles qui s'appliquent au corps dans la scène. Une pastille
+                    d'accent décorative ne dit pas ce qu'on va porter.
+                  */}
                   <span
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-lg"
-                    style={{ backgroundColor: `${item.accent}22`, border: `1px solid ${item.accent}55` }}
+                    className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg text-lg"
+                    style={{
+                      backgroundColor: item.palette.top,
+                      border: `1px solid ${item.accent}66`,
+                      backgroundImage: `linear-gradient(135deg, ${item.palette.top} 0 50%, ${item.palette.bottom} 50% 100%)`,
+                    }}
+                    aria-hidden
                   >
-                    {item.emoji}
+                    <span className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]">{item.emoji}</span>
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-ink">{item.name}</span>

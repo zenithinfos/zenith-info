@@ -34,6 +34,8 @@ import {
 } from "@/game/forest";
 import { terrainHeight } from "@/game/terrain";
 import { type Animal } from "@/game/animals";
+import { buildFruitPlant, type FruitPlantMaterials } from "./FruitPlants";
+import { type FruitPlant } from "@/game/forage";
 import { type MewaState } from "@/game/mewas";
 import { type Shelter } from "@/game/engine";
 import { type WeaponId } from "@/game/hunting";
@@ -51,6 +53,7 @@ import {
   disposeHumanRig,
   humanKick,
   humanSlash,
+  applyHumanOutfit,
   poseHuman,
   setHumanWeapon,
   type HumanMotion,
@@ -147,6 +150,13 @@ export interface SceneController {
   setAnimals: (animals: Animal[]) => void;
   /** Les esprits de la forêt : un instantané suffit, ils flottent seuls. */
   setMewas: (mewas: MewaState[]) => void;
+  /** Les plants à fruits : ce qu'il reste à cueillir sur chacun. */
+  setFruits: (plants: FruitPlant[]) => void;
+  /**
+   * Tenue portée. Elle change les couleurs du corps, pas seulement les
+   * statistiques : sans ça, le vestiaire est un tableau de chiffres.
+   */
+  setOutfit: (outfitId: string) => void;
   /** Arme tenue en main. */
   setWeapon: (id: WeaponId) => void;
   /** Visée (arme épaulée). */
@@ -1445,6 +1455,73 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       }
     };
 
+
+    // ------------------------------------------------------------------
+    // Fruits : les plantes que l'on cueille
+    // ------------------------------------------------------------------
+    // Le joueur ne « voyait pas les fruits » pour une raison simple : il n'y en
+    // avait aucun. Le compteur montait en marchant. Voici les plantes.
+    //
+    // Ce sont des arbustes de sous-bois, pas des arbres décorés : une tige
+    // grêle, trois rameaux, des feuilles larges — les mêmes cartes texturées
+    // que le reste du sous-bois, pour que la plante appartienne à la forêt —
+    // et des fruits en grappes à hauteur de main. Un fruit qu'on ne peut pas
+    // atteindre n'est pas une ressource, c'est un décor.
+
+    const fruitGroup = new THREE.Group();
+    fruitGroup.name = "fruits";
+    scene.add(fruitGroup);
+
+    const fruitBark = new THREE.MeshStandardMaterial({ color: 0x4a3a2b, roughness: 0.96 });
+    // Même feuillage que le sous-bois : la plante doit se fondre dans la masse
+    // verte, et seuls ses fruits doivent ressortir.
+    const fruitLeaf = foliageMaterial(TEXTURES.bigleaf, {
+      tint: 0xe8b596,
+      sway: 0.045,
+      alphaTest: 0.4,
+      normal: TEXTURES.bigleafNormal,
+      normalScale: 0.95,
+    });
+    const leafCardGeometry = new THREE.PlaneGeometry(1, 1);
+
+    /**
+     * Matière d'un fruit.
+     *
+     * Un fruit n'est pas mat : sa peau est lisse et renvoie la tache de ciel
+     * qui passe entre les feuilles. C'est ce reflet qui le fait repérer dans
+     * la pénombre, plus sûrement que sa couleur — et c'est aussi ce qui le
+     * sépare d'une baie en plastique.
+     */
+    const fruitMeshes = new Map<number, { group: THREE.Group; fruits: THREE.Mesh[] }>();
+    const fruitMaterialsForPlants: FruitPlantMaterials = {
+      bark: fruitBark,
+      leaf: fruitLeaf,
+      leafGeometry: leafCardGeometry,
+    };
+
+    /** Instantané des plants : on crée une fois, on montre les fruits mûrs. */
+    const syncFruits = (plants: FruitPlant[]) => {
+      const seen = new Set<number>();
+      for (const plant of plants) {
+        seen.add(plant.id);
+        let mesh = fruitMeshes.get(plant.id);
+        if (!mesh) {
+          mesh = buildFruitPlant(plant, fruitMaterialsForPlants, terrainHeight(plant.x, plant.z));
+          fruitMeshes.set(plant.id, mesh);
+          fruitGroup.add(mesh.group);
+        }
+        // On montre les fruits mûrs, du premier au dernier cueilli.
+        mesh.fruits.forEach((fruit, index) => {
+          fruit.visible = index < plant.ripe;
+        });
+      }
+      for (const [id, mesh] of fruitMeshes) {
+        if (seen.has(id)) continue;
+        fruitGroup.remove(mesh.group);
+        fruitMeshes.delete(id);
+      }
+    };
+
     // ------------------------------------------------------------------
     // Abris : un lit, un feu, un drapeau
     // ------------------------------------------------------------------
@@ -2413,6 +2490,12 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       },
       setMewas(mewas) {
         syncMewas(mewas);
+      },
+      setFruits(plants) {
+        syncFruits(plants);
+      },
+      setOutfit(outfitId) {
+        applyHumanOutfit(playerRig, outfitId);
       },
       setWeapon(id) {
         viewModel.setWeapon(id);

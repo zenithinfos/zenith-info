@@ -25,6 +25,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { SKIN_GLB_TINT, SKIN_SHEEN } from "@/game/appearance";
+import { getOutfit } from "@/game/outfits";
 import { type WeaponId } from "@/game/hunting";
 import { createWeaponModel, disposeWeaponModel } from "./WeaponModels";
 import { type HumanPose, type HumanRig } from "./HumanModel";
@@ -51,11 +52,55 @@ export interface AvatarRig extends HumanRig {
 /* Habitat                                                            */
 /* ------------------------------------------------------------------ */
 
+/** Ce qu'une matière du maillage représente : peau, tissu, cuir, sangles. */
+type ClothSlot = "top" | "bottom" | "boot" | "gear";
+
+/**
+ * Classe une matière d'après son nom.
+ *
+ * Le modèle importé nomme ses matières `Wolf3D_Body`, `Wolf3D_Outfit_Top`,
+ * `Wolf3D_Outfit_Bottom`, `Wolf3D_Outfit_Footwear`. Le piège est là :
+ * **`Wolf3D_Body` est le corps nu** — les bras, les mains, les jambes sous le
+ * short — et non un vêtement. L'ancien test cherchait « body » pour reconnaître
+ * un haut : le corps entier recevait donc la matière de la chemise, couleur
+ * olive comprise. Le personnage avait la peau peinte en tissu, et l'on ne
+ * pouvait plus distinguer le corps de la tenue. C'est exactement ce qui était
+ * signalé.
+ */
+function classify(name: string): { skin: boolean; face: boolean; hat: boolean; cloth: ClothSlot | null } {
+  const n = name.toLowerCase();
+  // La peau du corps porte le nom du corps : c'est le cas à traiter en premier.
+  if (n.includes("skin") || n === "wolf3d_body" || n.endsWith("_body")) {
+    return { skin: true, face: false, hat: false, cloth: null };
+  }
+  // Yeux, dents, barbe, cheveux : matières propres, ni peau ni tissu.
+  if (n.includes("eye") || n.includes("teeth") || n.includes("beard") || n.includes("hair")) {
+    return { skin: false, face: true, hat: false, cloth: null };
+  }
+  if (n.includes("headwear") || n.includes("hat")) {
+    return { skin: false, face: false, hat: true, cloth: null };
+  }
+  if (n.includes("footwear") || n.includes("shoe") || n.includes("boot") || n.includes("foot")) {
+    return { skin: false, face: false, hat: false, cloth: "boot" };
+  }
+  if (n.includes("bottom") || n.includes("leg") || n.includes("pant") || n.includes("short")) {
+    return { skin: false, face: false, hat: false, cloth: "bottom" };
+  }
+  if (n.includes("top") || n.includes("shirt") || n.includes("sleeve")) {
+    return { skin: false, face: false, hat: false, cloth: "top" };
+  }
+  return { skin: false, face: false, hat: false, cloth: "gear" };
+}
+
 /**
  * Habille le personnage pour la forêt.
  *
- * Les matières d'origine (costume de ville, chaussures cirées) sont remplacées
- * sur tout ce qui est tissu ; la peau, les yeux et les cheveux restent intacts.
+ * La peau garde sa texture photographique — c'est justement ce qu'on ne sait
+ * pas fabriquer — et reçoit seulement la carnation. Les tissus reçoivent nos
+ * cartes de toile, de cuir et de sangle.
+ *
+ * Chaque matière de vêtement est étiquetée (`userData.slot`) pour que le choix
+ * de tenue puisse ensuite la recolorer sans reconstruire le maillage.
  */
 function dressForForest(root: THREE.Object3D): THREE.Material[] {
   const created: THREE.Material[] = [];
@@ -87,84 +132,118 @@ function dressForForest(root: THREE.Object3D): THREE.Material[] {
     const material = child.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
     const first = Array.isArray(material) ? material[0] : material;
     const name = (first.name ?? "").toLowerCase();
+    const kind = classify(name);
 
-    // La peau, les yeux, les dents, les cheveux et le chapeau restent tels
-    // quels : on ne fabrique pas une peau crédible, celle du modèle l'est.
-    if (
-      name.includes("skin") ||
-      name.includes("eye") ||
-      name.includes("teeth") ||
-      name.includes("beard") ||
-      name.includes("hair") ||
-      name.includes("head")
-    ) {
-      first.roughness = name.includes("skin") ? 0.58 : 0.8;
+    if (kind.skin) {
+      first.roughness = 0.58;
       first.metalness = 0;
-      if (name.includes("skin")) {
-        // La peau du modèle importé est une texture claire. On ne la remplace
-        // pas : on la multiplie. Les pores, les taches et les plis de la carte
-        // d'origine restent, seule la carnation descend — c'est la seule façon
-        // d'obtenir un visage qui ne soit pas un aplat de couleur.
-        first.color.set(SKIN_GLB_TINT);
-        // Un peu de reflet diffus : sans lui, une peau foncée sous la canopée
-        // se lit comme une silhouette découpée.
-        if ("sheen" in first) {
-          const physical = first as THREE.MeshPhysicalMaterial;
-          physical.sheen = 0.45;
-          physical.sheenColor.set(SKIN_SHEEN);
-          physical.sheenRoughness = 0.6;
-        }
+      // La carnation du visage **et** du corps : la même. Deux peaux
+      // différentes — un visage sombre et des avant-bras pâles — c'était le
+      // résultat quand seule la tête recevait la teinte.
+      first.color.set(SKIN_GLB_TINT);
+      if ("sheen" in first) {
+        const physical = first as THREE.MeshPhysicalMaterial;
+        physical.sheen = 0.45;
+        physical.sheenColor.set(SKIN_SHEEN);
+        physical.sheenRoughness = 0.6;
       }
-      // Le chapeau de ville devient un feutre de brousse : même forme, autre
-      // matière. Un fedora noir au milieu de la forêt ne pardonne pas.
-      if (name.includes("headwear") && "color" in first) {
-        (first as THREE.MeshStandardMaterial).color.set(0x4a4436);
-        first.roughness = 0.95;
-      }
+      first.name = `${first.name}-peau`;
       return;
     }
 
-    const isShoe = name.includes("foot") || name.includes("shoe") || name.includes("boot");
-    const isTrousers = name.includes("bottom") || name.includes("leg") || name.includes("pant");
-    const isTop = name.includes("top") || name.includes("body") || name.includes("shirt");
+    if (kind.face) {
+      first.roughness = 0.8;
+      first.metalness = 0;
+      return;
+    }
 
-    const replacement = isShoe
-      ? new THREE.MeshPhysicalMaterial({
-          color: 0x2c2118,
-          roughness: 0.55,
-          metalness: 0.04,
-          clearcoat: 0.25,
-          clearcoatRoughness: 0.5,
-          ...maps("leather", 3),
-        })
-      : isTrousers
-        ? new THREE.MeshStandardMaterial({
-            color: 0x4a4f3a,
-            roughness: 0.96,
-            metalness: 0,
-            ...maps("trousers", 6),
+    if (kind.hat) {
+      // Le chapeau de ville devient un feutre de brousse.
+      first.color.set(0x4a4436);
+      first.roughness = 0.95;
+      first.userData.slot = "gear";
+      created.push(first);
+      return;
+    }
+
+    const slot: ClothSlot = kind.cloth ?? "gear";
+    const replacement =
+      slot === "boot"
+        ? new THREE.MeshPhysicalMaterial({
+            color: 0x2c2118,
+            roughness: 0.55,
+            metalness: 0.04,
+            clearcoat: 0.25,
+            clearcoatRoughness: 0.5,
+            ...maps("leather", 3),
           })
-        : isTop
+        : slot === "bottom"
           ? new THREE.MeshStandardMaterial({
-              color: 0x565e3e,
-              roughness: 0.94,
+              color: 0x3d4430,
+              roughness: 0.96,
               metalness: 0,
-              ...maps("shirt", 6),
+              ...maps("trousers", 6),
             })
-          : new THREE.MeshStandardMaterial({
-              color: 0x5c5e46,
-              roughness: 0.92,
-              metalness: 0,
-              ...maps("webbing", 4),
-            });
+          : slot === "top"
+            ? new THREE.MeshStandardMaterial({
+                color: 0x8a8f6d,
+                roughness: 0.94,
+                metalness: 0,
+                ...maps("shirt", 6),
+              })
+            : new THREE.MeshStandardMaterial({
+                color: 0x5c5e46,
+                roughness: 0.92,
+                metalness: 0,
+                ...maps("webbing", 4),
+              });
 
     replacement.name = `${first.name}-foret`;
     replacement.normalScale = new THREE.Vector2(0.55, 0.55);
+    replacement.userData.slot = slot;
     child.material = replacement;
     created.push(replacement);
   });
 
   return created;
+}
+
+/**
+ * Applique une tenue au maillage déjà habillé.
+ *
+ * On ne reconstruit rien : on change la couleur et la brillance des matières
+ * étiquetées. C'est instantané, et ça évite de recharger un modèle de 16 000
+ * triangles à chaque fois qu'on ouvre le vestiaire.
+ *
+ * Les valeurs sont choisies pour **séparer la peau du tissu** : la carnation
+ * d'un homme du bassin du Congo est sombre et chaude ; les étoffes sont plus
+ * claires et plus froides, ou franchement plus sombres que la peau. Une tenue
+ * de la même valeur que le corps redevient un corps.
+ */
+export function applyAvatarOutfit(rig: { materials: THREE.Material[] }, outfitId: string): void {
+  const palette = getOutfit(outfitId).palette;
+  for (const material of rig.materials) {
+    const slot = material.userData?.slot as ClothSlot | undefined;
+    if (!slot) continue;
+    const cloth = material as THREE.MeshStandardMaterial;
+    cloth.color.set(
+      slot === "top"
+        ? palette.top
+        : slot === "bottom"
+          ? palette.bottom
+          : slot === "boot"
+            ? palette.boot
+            : palette.gear,
+    );
+    // Le cuir garde son vernis ; les tissus tissés de fils ont une légère
+    // transparence de surface, pas un plastique.
+    cloth.roughness = slot === "boot" ? 0.55 : 0.94 - palette.sheen * 0.22;
+    if ("sheen" in cloth) {
+      const physical = cloth as THREE.MeshPhysicalMaterial;
+      physical.sheen = palette.sheen * 0.55;
+      physical.sheenColor.set(palette.top).lerp(new THREE.Color(0xffffff), 0.4);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */
