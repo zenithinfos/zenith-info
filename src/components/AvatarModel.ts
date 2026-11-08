@@ -248,6 +248,7 @@ export async function loadAvatarRig(): Promise<AvatarRig | null> {
     recoil: 0,
     recoilVelocity: 0,
     slash: 0,
+    slashDuration: 0.4,
     weaponId: null,
     skeleton,
     motion,

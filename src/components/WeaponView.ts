@@ -130,6 +130,61 @@ const ARMS: Record<WeaponId, { right: Placement; left?: Placement }> = {
 const REST = new THREE.Vector3(0.17, -0.19, -0.42);
 const AIM = new THREE.Vector3(0.0, -0.115, -0.34);
 
+/**
+ * Le coup de lame, dans l'espace de la caméra.
+ *
+ * La vue subjective ne montrait qu'une rotation de 0,9 rad : la machette
+ * s'inclinait sur place. Un coup, c'est trois temps — la lame recule et monte
+ * (armé), elle part en diagonale vers le bas et la gauche (frappe), elle
+ * revient. Ces deux poses sont les deux extrémités du trajet ; la courbe
+ * partagée avec le corps (`strikeWeight`) les relie.
+ *
+ * `wind` et `cut` sont des **décalages** par rapport à la pose de repos, pas
+ * des positions absolues : le balancement de marche continue de s'appliquer
+ * par-dessus.
+ */
+interface ViewStrike {
+  wind: { p: [number, number, number]; r: [number, number, number] };
+  cut: { p: [number, number, number]; r: [number, number, number] };
+  /** Durée du coup en secondes, accordée à celle du personnage en pied. */
+  duration: number;
+}
+
+export const VIEW_STRIKES: Record<string, ViewStrike> = {
+  // Machette : armé au-dessus de l'épaule droite, taille descendante vers la
+  // gauche. Débattement de 34 cm sur la garde, 1,6 rad en travers.
+  machette: {
+    wind: { p: [0.05, 0.07, 0.1], r: [0.55, 0.38, 0.5] },
+    cut: { p: [-0.19, -0.17, -0.24], r: [-0.75, -0.62, -0.55] },
+    duration: 0.66,
+  },
+  // Couteau : plus court, plus direct. L'armé reste près du buste.
+  couteau: {
+    wind: { p: [0.04, 0.05, 0.08], r: [0.45, 0.32, 0.42] },
+    cut: { p: [-0.14, -0.13, -0.2], r: [-0.6, -0.5, -0.45] },
+    duration: 0.56,
+  },
+  // Lance : pas de taille, un estoc. Recul de 18 cm, poussée de 46 cm en
+  // avant, presque sans rotation.
+  lance: {
+    wind: { p: [0.03, 0.02, 0.18], r: [0.12, 0.14, 0.06] },
+    cut: { p: [-0.06, -0.05, -0.46], r: [-0.1, -0.1, -0.04] },
+    duration: 0.72,
+  },
+};
+
+/** Courbe du geste, identique à celle de `HumanModel` — les deux corps bougent ensemble. */
+export function strikeWeight(p: number): number {
+  const climb = THREE.MathUtils.smoothstep(p, 0, 0.26);
+  const fall = 1 - THREE.MathUtils.smoothstep(p, 0.8, 1);
+  return climb * fall;
+}
+
+export function strikeEase(p: number): number {
+  const t = THREE.MathUtils.clamp((p - 0.26) / (0.72 - 0.26), 0, 1);
+  return Math.pow(THREE.MathUtils.smoothstep(t, 0, 1), 0.95);
+}
+
 export function createViewModel(): ViewModel {
   const group = new THREE.Group();
   const skin = skinMaterial();
@@ -280,7 +335,11 @@ export function createViewModel(): ViewModel {
       recoilVelocity *= Math.exp(-9 * dt);
       recoil += recoilVelocity * dt;
 
-      if (slashPhase > 0) slashPhase = Math.max(0, slashPhase - dt * 4.2);
+      // Le coup dure le temps de l'arme : le même timing que le personnage en
+      // pied, sans quoi la vue subjective et le corps se désynchronisent.
+      const strike = VIEW_STRIKES[current];
+      const slashDuration = strike?.duration ?? 0.5;
+      if (slashPhase > 0) slashPhase = Math.max(0, slashPhase - dt / slashDuration);
 
       sway += dt * (moving ? 7 : 2.2);
       const bobX = Math.sin(sway) * (moving ? 0.011 : 0.0025);
@@ -296,8 +355,21 @@ export function createViewModel(): ViewModel {
       group.rotation.set(
         recoil * 0.22 + Math.sin(clock * 0.9) * 0.004,
         0.06 + Math.sin(clock * 0.55) * 0.008,
-        -slashPhase * 0.9 - recoil * 0.05,
+        -recoil * 0.05,
       );
+
+      // Superposition du coup : le holdeur avance/reste, la main suit l'arme.
+      if (strike && slashPhase > 0) {
+        const progress = 1 - slashPhase;
+        const weight = strikeWeight(progress);
+        const eased = strikeEase(progress);
+        group.position.x += THREE.MathUtils.lerp(strike.wind.p[0], strike.cut.p[0], eased) * weight;
+        group.position.y += THREE.MathUtils.lerp(strike.wind.p[1], strike.cut.p[1], eased) * weight;
+        group.position.z += THREE.MathUtils.lerp(strike.wind.p[2], strike.cut.p[2], eased) * weight;
+        group.rotation.x += THREE.MathUtils.lerp(strike.wind.r[0], strike.cut.r[0], eased) * weight;
+        group.rotation.y += THREE.MathUtils.lerp(strike.wind.r[1], strike.cut.r[1], eased) * weight;
+        group.rotation.z += THREE.MathUtils.lerp(strike.wind.r[2], strike.cut.r[2], eased) * weight;
+      }
 
       if (flashTimer > 0) {
         flashTimer -= dt;

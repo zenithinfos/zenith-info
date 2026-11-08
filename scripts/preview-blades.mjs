@@ -205,9 +205,6 @@ WEAPONS.forEach((weapon, row) => {
   const box = new THREE.Box3().setFromObject(model.group);
   const size = new THREE.Vector3();
   box.getSize(size);
-  const reach = Math.max(size.z, 0.25);
-  const zoom = reach * 1.15;
-
   // Cadrage : la plus grande dimension de l'arme, corrigée du champ.
   const span = Math.max(size.z, size.x * 2.2, 0.12);
   const centre = box.getCenter(new THREE.Vector3());

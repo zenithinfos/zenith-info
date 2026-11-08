@@ -48,7 +48,12 @@ export const HUMAN_HOLD: Record<WeaponId, Hold> = {
   lance: {
     grip: [0, -0.01, 0],
     fore: [0, -0.01, -0.22],
-    aim: { position: [0.1, 1.3, -0.16], yaw: 0.02 },
-    carry: { position: [0.27, 0.98, -0.02], rotation: [1.5, 0.1, 0.05] },
+    // En joue, la lance est couchée sous l'aisselle, pointe devant.
+    aim: { position: [0.12, 1.26, -0.14], yaw: 0.04 },
+    // **Au portage, elle est horizontale.** La rotation était de +1,5 rad :
+    // la hampe montait droit comme un drapeau, pointe à 2,58 m et talon à
+    // 0,63 m. Personne ne porte un épieu ainsi. Pointe vers −Z, donc rotation
+    // nulle, et la main tient le bois au tiers arrière.
+    carry: { position: [0.2, 1.03, -0.18], rotation: [-0.12, 0.14, 0.06] },
   },
 };

@@ -86,6 +86,8 @@ export interface HumanRig {
   recoil: number;
   recoilVelocity: number;
   slash: number;
+  /** Durée du coup en cours, en secondes : une machette est plus lente qu'un couteau. */
+  slashDuration: number;
   weaponId: WeaponId | null;
 }
 
@@ -1686,6 +1688,7 @@ export function createHumanRig(): HumanRig {
     recoil: 0,
     recoilVelocity: 0,
     slash: 0,
+    slashDuration: 0.4,
     weaponId: null,
   };
 }
@@ -1830,9 +1833,10 @@ function placeWeapon(
   pitch: number,
   yawOffset: number,
   kick: number,
-): { grip: THREE.Vector3 | null; fore: THREE.Vector3 | null } {
+  slashPhase: number,
+): { grip: THREE.Vector3 | null; fore: THREE.Vector3 | null; swing: number } {
   const model = rig.weapon;
-  if (!model) return { grip: null, fore: null };
+  if (!model) return { grip: null, fore: null, swing: 0 };
   const hold = HUMAN_HOLD[model.id];
 
   const holder = rig.weaponHolder;
@@ -1850,13 +1854,24 @@ function placeWeapon(
     THREE.MathUtils.lerp(carry.rotation[1], hold.aim.yaw + yawOffset, aim),
     THREE.MathUtils.lerp(carry.rotation[2], hold.aim.roll ?? 0, aim),
   );
+  // Le coup se **superpose** à la pose de repos : on mélange vers la pose de
+  // frappe avec un poids qui monte et redescend, donc le bras repart de sa
+  // position de repos sans à-coup.
+  const strike = strikeAt(model.id, slashPhase);
+  if (strike) {
+    const k = strike.weight;
+    holder.position.lerp(strike.pose.position, k);
+    holder.rotation.x += (strike.pose.rotation.x - holder.rotation.x) * k;
+    holder.rotation.y += (strike.pose.rotation.y - holder.rotation.y) * k;
+    holder.rotation.z += (strike.pose.rotation.z - holder.rotation.z) * k;
+  }
   holder.updateMatrixWorld(true);
 
   const grip = holder.localToWorld(new THREE.Vector3(...hold.grip));
   const fore = hold.fore
     ? holder.localToWorld(new THREE.Vector3(...hold.fore))
     : null;
-  return { grip, fore };
+  return { grip, fore, swing: 0 };
 }
 
 export function humanKick(rig: HumanRig, strength = 1): void {
@@ -1869,8 +1884,151 @@ export function humanKick(rig: HumanRig, strength = 1): void {
   if (rig.weapon) rig.flash.position.copy(rig.weapon.muzzle);
 }
 
+/**
+ * Le coup de lame : montée, frappe, retour.
+ *
+ * Ce n'est pas un détail d'animation. Sans geste, l'arme reste au repos et le
+ * personnage encaisse une charge de potamochère sans lever le bras — on voyait
+ * le sang partir, pas le coup. Le corps entier participe : l'épaule monte, le
+ * torse tourne, les hanches contre-tournent, et la main libre part en
+ * balancier.
+ *
+ * Trois temps, exprimés en fraction du coup (`p` de 0 à 1) :
+ *
+ *   · **l'armé** (0 → 0,18) : la lame monte au-dessus de l'épaule droite ;
+ *   · **la frappe** (0,18 → 0,60) : elle balaie en diagonale vers le bas et la
+ *     gauche, devant la poitrine ;
+ *   · **le retour** (0,60 → 1) : le bras revient au repos.
+ *
+ * Les poses sont données en coordonnées du corps, comme `HUMAN_HOLD` : le
+ * holdeur d'arme s'y place, et les deux mains suivent par IK. C'est pour cela
+ * qu'il suffit de bouger le holdeur pour que les bras fassent le geste.
+ */
+
+interface StrikePose {
+  /** Position du holdeur d'arme, en mètres depuis le sol. */
+  position: THREE.Vector3;
+  /** Rotation du holdeur (Euler YXZ) : 0 pointe devant, positif pointe en haut. */
+  rotation: THREE.Vector3;
+  /**
+   * Rotation du **buste** autour de la verticale, en radians.
+   *
+   * Positive : le buste tourne vers la gauche, comme la frappe. Le signe a été
+   * inversé une première fois : à l'armé, le buste s'ouvrait du côté opposé à
+   * l'arme, ce qui donnait un corps qui se contredit. Il s'ouvre désormais du
+   * côté de la lame, puis se referme en travers du coup.
+   */
+  twist: number;
+}
+
+/** Points de l'armé et de la frappe, par arme. */
+const STRIKES: Record<string, { wind: StrikePose; cut: StrikePose }> = {
+  // Machette et couteau : taille en diagonale, de l'épaule droite vers la
+  // hanche gauche. C'est le coup que porte un défricheur, pas une estoc.
+  couteau: {
+    // Un couteau ne s'arme pas au-dessus de la tête : la garde monte à hauteur
+    // de poitrine, lame retournée vers l'arrière, et le coup part de là.
+    wind: {
+      position: new THREE.Vector3(0.29, 1.3, 0.02),
+      rotation: new THREE.Vector3(-1.15, -0.34, 0.3),
+      twist: -0.28,
+    },
+    cut: {
+      position: new THREE.Vector3(-0.02, 1.12, -0.4),
+      rotation: new THREE.Vector3(0.35, 0.7, -0.5),
+      twist: 0.56,
+    },
+  },
+  machette: {
+    // Plus lourde : l'armé monte plus haut et plus loin derrière, la frappe
+    // descend plus bas.
+    wind: {
+      position: new THREE.Vector3(0.34, 1.46, 0.08),
+      rotation: new THREE.Vector3(-1.3, -0.36, 0.38),
+      twist: -0.34,
+    },
+    cut: {
+      position: new THREE.Vector3(-0.06, 1.06, -0.44),
+      rotation: new THREE.Vector3(0.45, 0.78, -0.55),
+      twist: 0.68,
+    },
+  },
+  // Lance : ce n'est pas une taille, c'est un estoc. On recule la hampe, puis
+  // on pousse droit devant, à deux mains.
+  lance: {
+    // L'estoc ne tourne presque pas : il pousse. Un quart de radian d'ouverture
+    // au recul, rien à l'extension.
+    // La lance est modélisée pointe vers −Z. Un holdeur couché sur +π/2 la
+    // redresse à la verticale : c'était une perche brandie, pas un estoc. Ces
+    // deux poses-la gardent quasi horizontales, pointe devant.
+    // Le recul de l'estoc est franc : la hampe part de 40 cm derrière la main
+    // et va 85 cm devant. Un quart de mètre de poussée ne se voyait pas.
+    wind: {
+      position: new THREE.Vector3(0.26, 1.0, 0.42),
+      rotation: new THREE.Vector3(-0.1, 0.18, 0.06),
+      twist: -0.34,
+    },
+    cut: {
+      position: new THREE.Vector3(0.08, 1.26, -0.6),
+      rotation: new THREE.Vector3(0.06, 0.06, 0.02),
+      twist: 0.2,
+    },
+  },
+};
+
+/**
+ * Durée du coup, en secondes.
+ *
+ * Réglée par la vitesse de la main, pas par le réalisme cinématographique :
+ * une machette qui frappe met environ un demi-seconde du début de l'armé à la
+ * fin du retour, et à 60 images par seconde cela donne des pas de dix à
+ * quinze centimètres — la vitesse réelle d'une lame. Plus court, la main
+ * saute d'une image à l'autre.
+ */
+const SLASH_DURATION: Record<string, number> = {
+  couteau: 0.56,
+  machette: 0.66,
+  lance: 0.72,
+};
+
 export function humanSlash(rig: HumanRig): void {
   rig.slash = 1;
+  rig.slashDuration = SLASH_DURATION[rig.weaponId ?? ""] ?? 0.4;
+}
+
+/**
+ * Pose du holdeur pendant le coup, ou `null` hors du coup.
+ *
+ * Le mélange se fait par un poids qui monte vite et redescend lentement : à
+ * `p = 0` le poids est nul, donc le bras repart exactement de sa pose de repos
+ * — sans ce garde-fou, la première image du coup ferait sauter le personnage.
+ */
+function strikeAt(id: WeaponId | null, p: number): { pose: StrikePose; weight: number } | null {
+  const strike = id ? STRIKES[id] : undefined;
+  if (!strike || p <= 0 || p >= 1) return null;
+
+  // Montée et descente **longues**. Réglées sur 0,16 du geste, la main passait
+  // de 0 à 57 % du chemin en deux images : un saut de 26 cm, qui se lit comme
+  // une téléportation, pas comme un coup.
+  const weight = THREE.MathUtils.smoothstep(p, 0, 0.26) * (1 - THREE.MathUtils.smoothstep(p, 0.8, 1));
+  if (weight <= 0.001) return null;
+
+  // Armé puis frappe. La courbe en puissance 0,55 donnait un départ si sec
+  // qu'entre deux images à 60 Hz la main sautait de **30 cm** : à l'écran, ce
+  // n'est pas un coup rapide, c'est une téléportation. 0,95 garde un léger
+  // surcroît de vitesse en fin de course — la lame accélère — sans dépasser la
+  // vitesse qu'un poignet peut réellement imprimer.
+  const t = THREE.MathUtils.clamp((p - 0.26) / (0.72 - 0.26), 0, 1);
+  const eased = Math.pow(THREE.MathUtils.smoothstep(t, 0, 1), 0.95);
+
+  return {
+    pose: {
+      position: strike.wind.position.clone().lerp(strike.cut.position, eased),
+      rotation: strike.wind.rotation.clone().lerp(strike.cut.rotation, eased),
+      twist: THREE.MathUtils.lerp(strike.wind.twist, strike.cut.twist, eased),
+    },
+    weight,
+  };
 }
 
 /** Anime le personnage. À appeler une fois par image. */
@@ -1884,7 +2042,7 @@ export function poseHuman(rig: HumanRig, pose: HumanPose): void {
   rig.recoilVelocity -= rig.recoil * 110 * dt;
   rig.recoilVelocity *= Math.exp(-11 * dt);
   rig.recoil += rig.recoilVelocity * dt;
-  if (rig.slash > 0) rig.slash = Math.max(0, rig.slash - dt * 4);
+  if (rig.slash > 0) rig.slash = Math.max(0, rig.slash - dt / Math.max(0.15, rig.slashDuration));
 
   const moving = pose.motion === "walk" || pose.motion === "run" || pose.motion === "sneak" || pose.motion === "swim";
   const cadence =
@@ -1898,13 +2056,24 @@ export function poseHuman(rig: HumanRig, pose: HumanPose): void {
   const lean =
     pose.motion === "run" ? 0.2 : pose.motion === "sneak" ? 0.34 : pose.motion === "walk" ? 0.05 : 0.02;
 
+  // --- Le coup, en un seul endroit ---------------------------------------
+  // Le torse, les hanches et le bras libre lisent la même courbe que le
+  // holdeur : une seule source, sinon le bras part d'un côté et le buste de
+  // l'autre.
+  const strike = strikeAt(rig.weaponId, 1 - rig.slash);
+  const strikeWeight = strike?.weight ?? 0;
+  // Le torse tourne de la droite vers la gauche pendant la frappe. Les hanches
+  // contre-tournent de moitié — c'est ce contre-mouvement qui distingue un
+  // coup de tout le corps d'un mouvement de bras.
+  const slashTwist = strike ? strike.pose.twist * strike.weight : 0;
+
   // --- Hanches ---------------------------------------------------------
   const bob = moving ? Math.abs(Math.cos(phase)) * 0.022 : 0;
   rig.hips.position.y = HUMAN_HIPS_Y - crouch - bob + breath * 0.003;
   rig.hips.rotation.set(
     0,
-    moving ? Math.sin(phase) * 0.06 : Math.sin(time * 0.4) * 0.02,
-    moving ? Math.sin(phase) * 0.025 : Math.sin(time * 0.55) * 0.015,
+    (moving ? Math.sin(phase) * 0.06 : Math.sin(time * 0.4) * 0.02) - slashTwist * 0.45,
+    (moving ? Math.sin(phase) * 0.025 : Math.sin(time * 0.55) * 0.015) + slashTwist * 0.08,
   );
 
   // --- Tronc -----------------------------------------------------------
@@ -1915,18 +2084,19 @@ export function poseHuman(rig: HumanRig, pose: HumanPose): void {
     moving ? Math.sin(phase) * 0.02 : 0,
   );
   rig.chest.rotation.set(
-    breath * 0.012 - rig.recoil * 0.05,
+    breath * 0.012 - rig.recoil * 0.05 + strikeWeight * 0.12,
     THREE.MathUtils.lerp(moving ? -Math.sin(phase) * 0.05 : 0, aimTwist * 0.6, rig.aim) -
-      rig.aim * 0.3,
-    -rig.slash * 0.18,
+      rig.aim * 0.3 +
+      slashTwist,
+    -rig.slash * 0.12 + slashTwist * 0.12,
   );
 
   // --- Tête ------------------------------------------------------------
   const headYaw = THREE.MathUtils.clamp(pose.aimYaw - aimTwist * 0.9, -0.7, 0.7);
   rig.neck.rotation.set(pose.aimPitch * 0.25, headYaw * 0.4, 0);
   rig.head.rotation.set(
-    pose.aimPitch * 0.55 + Math.sin(time * 0.37) * 0.02,
-    headYaw * 0.6 + (moving ? 0 : Math.sin(time * 0.21) * 0.16),
+    pose.aimPitch * 0.55 + Math.sin(time * 0.37) * 0.02 - strikeWeight * 0.06,
+    headYaw * 0.6 + (moving ? 0 : Math.sin(time * 0.21) * 0.16) - slashTwist * 0.5,
     moving ? Math.sin(phase) * 0.02 : 0,
   );
 
@@ -1955,7 +2125,8 @@ export function poseHuman(rig: HumanRig, pose: HumanPose): void {
   const weapon = rig.weapon;
   if (weapon) {
     const kick = rig.recoil;
-    const { grip, fore } = placeWeapon(rig, rig.aim, pose.aimPitch, pose.aimYaw, kick);
+    const slashPhase = 1 - rig.slash;
+    const { grip, fore } = placeWeapon(rig, rig.aim, pose.aimPitch, pose.aimYaw, kick, slashPhase);
 
     // La main droite tient toujours l'arme ; la gauche vient la soutenir.
     if (grip) {
@@ -1965,11 +2136,19 @@ export function poseHuman(rig: HumanRig, pose: HumanPose): void {
     if (fore) {
       const pole = scratch.c.copy(fore).add(new THREE.Vector3(-0.32, -0.5, 0.16));
       solveArm(rig.shoulder.left, rig.elbow.left, fore, pole, rig.aim);
-    } else if (rig.aim > 0.02) {
-      // Lame : la main libre se lève en garde devant la poitrine.
-      const guard = rig.chest.localToWorld(new THREE.Vector3(-0.2, 0.02, -0.34));
+    } else if (rig.aim > 0.02 || slashTwist > 0.06) {
+      // Lame : la main libre part en balancier. En garde elle se lève devant la
+      // poitrine ; pendant le coup elle s'ouvre vers l'arrière-gauche, ce qui
+      // équilibre la rotation du buste au lieu de la contrarier.
+      // La main libre ne s'ouvre qu'à la **frappe** : à l'armé elle reste près
+      // du corps. La faire partir en même temps que la lame donnait un
+      // personnage qui s'écarte les bras avant même de frapper.
+      const spread = THREE.MathUtils.clamp(slashTwist / 0.6, 0, 1);
+      const guard = rig.chest.localToWorld(
+        new THREE.Vector3(-0.2 - spread * 0.16, 0.02, -0.34 + spread * 0.3),
+      );
       const pole = scratch.c.copy(guard).add(new THREE.Vector3(-0.4, -0.2, 0.3));
-      solveArm(rig.shoulder.left, rig.elbow.left, guard, pole, rig.aim);
+      solveArm(rig.shoulder.left, rig.elbow.left, guard, pole, Math.max(rig.aim, spread));
     }
   }
 
