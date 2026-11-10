@@ -19,7 +19,7 @@ import {
 import { WATER_BODIES, rainParams, waterDepthAt, waterLevelAt } from "@/game/water";
 import { canopySheets } from "@/game/canopy";
 import { DEFAULT_START, SPAWN_CLEARING, ZONES } from "@/game/levels";
-import { cameraClearance, configureCollision, stepOverAt } from "@/game/collision";
+import { boomTurnLimit, configureCollision, solveBoom, stepOverAt } from "@/game/collision";
 import {
   buildTile,
   plantCards,
@@ -677,6 +677,14 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
       roughness: 0.94,
       metalness: 0,
       normalScale: new THREE.Vector2(1.4, 1.4),
+      // **Double face.** Un fût est un cylindre ouvert dessiné en faces avant :
+      // dès que l'œil y entre — la caméra à l'épaule se rapproche au point de
+      // traverser un arbre — la paroi visible est une face arrière, donc
+      // éliminée, et l'on voit la forêt *à travers* le tronc. C'est ce qui
+      // donnait l'impression de transparence en passant près des obstacles.
+      // Quelques centaines de triangles de plus sur les fûts coûtent bien
+      // moins qu'une forêt qui s'ouvre comme une porte.
+      side: THREE.DoubleSide,
     });
     loadTexture(TEXTURES.bark, (texture) => {
       texture.repeat.set(2, 6);
@@ -698,6 +706,9 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
     const logGeometry = new THREE.CylinderGeometry(1, 1, 1, 6, 1);
     const logMaterial = new THREE.MeshStandardMaterial({
       color: 0xbfb49e,
+      // Même raison que les fûts : les troncs tombés se franchissent par-dessus,
+      // et la caméra les traverse.
+      side: THREE.DoubleSide,
       roughness: 0.95,
       normalScale: new THREE.Vector2(1.2, 1.2),
     });
@@ -2170,13 +2181,25 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
 
         // Un tronc entre l'œil et le personnage : le bois est dessiné en faces
         // avant, donc on voit *à travers* lui et le corps paraît transparent,
-        // coupé par le décor. On rapproche la caméra avant qu'elle n'y entre.
-        const free = cameraClearance(playerPosition.x, playerPosition.z, desiredX, desiredZ);
-        if (free < 1) {
-          desiredX = playerPosition.x + (desiredX - playerPosition.x) * free;
-          desiredZ = playerPosition.z + (desiredZ - playerPosition.z) * free;
-          desiredY = pivotY + (desiredY - pivotY) * free;
-        }
+        // coupé par le décor. On ne rapproche plus la caméra jusqu'à entrer
+        // dans le personnage : on **pivote** le bras pour trouver une ligne
+        // dégagée, et on ne raccourcit qu'en dernier recours.
+        // Le bras ne peut pivoter que tant que le personnage reste dans le
+        // cadre : la borne dépend du champ, donc de l'écran.
+        const turnLimit = boomTurnLimit(camera.fov, camera.aspect);
+        const shot = solveBoom(
+          playerPosition.x,
+          playerPosition.z,
+          desiredX,
+          desiredZ,
+          undefined,
+          undefined,
+          turnLimit,
+        );
+        const free = shot.reach;
+        desiredX = shot.x;
+        desiredZ = shot.z;
+        if (free < 1) desiredY = pivotY + (desiredY - pivotY) * free;
         // Amorti exponentiel : indépendant de la cadence d'images.
         const ease = 1 - Math.exp(-dt * 18);
         camera.position.x += (desiredX - camera.position.x) * ease;
@@ -2186,16 +2209,19 @@ export default function Scene({ onReady, onError, quality = "auto", className = 
         // Le lissage met quelques images à rejoindre la position voulue : on
         // revérifie après coup, sinon la caméra traverse le bois pendant ce
         // temps-là.
-        const stillFree = cameraClearance(
+        const settled = solveBoom(
           playerPosition.x,
           playerPosition.z,
           camera.position.x,
           camera.position.z,
+          undefined,
+          undefined,
+          turnLimit,
         );
-        if (stillFree < 1) {
-          camera.position.x = playerPosition.x + (camera.position.x - playerPosition.x) * stillFree;
-          camera.position.z = playerPosition.z + (camera.position.z - playerPosition.z) * stillFree;
-          camera.position.y = pivotY + (camera.position.y - pivotY) * stillFree;
+        if (settled.reach < 1) {
+          camera.position.x = settled.x;
+          camera.position.z = settled.z;
+          camera.position.y = pivotY + (camera.position.y - pivotY) * settled.reach;
         }
 
         // Jamais sous le sol, jamais dans la pente.

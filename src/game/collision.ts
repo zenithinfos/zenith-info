@@ -428,11 +428,6 @@ export function stepOverAt(x: number, z: number, radius = WALKER_RADIUS): number
 /**
  * Distance libre entre deux points, avant de heurter un fût.
  *
- * Pour la caméra à l'épaule : derrière le personnage, un tronc peut se
- * retrouver entre l'œil et lui. Comme le bois est dessiné en faces avant, on
- * voit alors *à travers* le tronc, et le personnage semble transparent, coupé
- * par le décor. On rapproche donc la caméra avant qu'elle n'entre dans l'arbre.
- *
  * Renvoie la fraction du trajet qui reste libre, entre 0 et 1.
  */
 export function cameraClearance(
@@ -461,4 +456,128 @@ export function cameraClearance(
     }
   }
   return 1;
+}
+
+/**
+ * En deçà de cette distance, la caméra est dans le personnage.
+ *
+ * Le bras de la caméra à l'épaule mesurait trois mètres dix, et il pouvait se
+ * raccourcir jusqu'à **37 cm** pour éviter un tronc. À cette distance l'œil est
+ * dans les épaules du personnage : le plan de découpe rappe le corps et, comme
+ * les matières sont dessinées en faces avant, on voit l'intérieur — le corps
+ * paraît transparent, coupé. Un mètre quinze garde la silhouette entière
+ * devant l'œil, arme comprise.
+ */
+export const BOOM_MIN_DISTANCE = 1.15;
+
+/**
+ * Angles essayés, par passes successives.
+ *
+ * Le bras de la caméra ne décide pas de la direction du regard : celle-ci
+ * appartient au joueur. Pivoter le bras déplace donc le personnage dans le
+ * cadre. En deçà de 25° il reste largement visible et le mouvement se lit comme
+ * un ajustement ; au-delà, il sortirait par le bord.
+ *
+ * On commence donc par des angles discrets, et on ne les dépasse que s'il n'y a
+ * vraiment pas d'autre issue. Mesuré sur la forêt générée : quand un fût barre
+ * le passage, 78 % des cas se règlent sous 25°.
+ */
+const BOOM_TURNS = [0, 0.14, -0.14, 0.28, -0.28, 0.42, -0.42, 0.58, -0.58, 0.78, -0.78];
+
+/** Rotation maximale du bras, si l'appelant n'en donne pas. */
+export const BOOM_MAX_TURN = 0.78;
+
+/**
+ * Rotation maximale compatible avec le cadre.
+ *
+ * Le personnage doit rester visible : un bras qui pivote de θ le décale de θ
+ * sur l'écran, et au-delà d'une fraction du demi-champ il sort par le bord.
+ * Le champ horizontal dépend de l'écran — un téléphone en portrait voit trois
+ * fois moins large qu'un écran d'ordinateur — donc la borne se calcule à
+ * l'exécution, pas en dur.
+ */
+export function boomTurnLimit(fovDegrees: number, aspect: number): number {
+  const halfVertical = (fovDegrees * Math.PI) / 360;
+  const halfHorizontal = Math.atan(Math.tan(halfVertical) * Math.max(0.3, aspect));
+  // Deux tiers du demi-champ : le personnage reste dans le cadre, décalé vers
+  // le bord, et le regard du joueur n'est pas modifié.
+  return Math.max(0.12, Math.min(BOOM_MAX_TURN, halfHorizontal * 0.66));
+}
+
+export interface BoomShot {
+  /** Position finale de la caméra, au sol. */
+  x: number;
+  z: number;
+  /** Fraction du bras utilisée : 1 = pleine longueur. */
+  reach: number;
+  /** Rotation appliquée au bras, en radians. */
+  turn: number;
+}
+
+/**
+ * Place le bras de la caméra.
+ *
+ * L'ancienne logique faisait une seule chose : rapprocher la caméra du
+ * personnage jusqu'à ce que la ligne soit libre. Deux défauts, tous les deux
+ * visibles à l'écran :
+ *
+ *   · le bras tombait à 37 cm — la caméra entrait dans le corps, qui
+ *     disparaissait par sa face arrière ;
+ *   · dans 0,6 % des positions, la caméra finissait **dans** un tronc, et
+ *     comme le bois est dessiné en faces avant, on voyait la forêt à travers
+ *     l'arbre.
+ *
+ * On fait donc l'inverse : d'abord **pivoter** le bras pour trouver une ligne
+ * dégagée, en gardant toute sa longueur ; ne raccourcir qu'en dernier recours,
+ * et jamais sous `BOOM_MIN_DISTANCE`.
+ */
+export function solveBoom(
+  playerX: number,
+  playerZ: number,
+  desiredX: number,
+  desiredZ: number,
+  minDistance = BOOM_MIN_DISTANCE,
+  radius = 0.28,
+  maxTurn = BOOM_MAX_TURN,
+): BoomShot {
+  const dx = desiredX - playerX;
+  const dz = desiredZ - playerZ;
+  const length = Math.hypot(dx, dz);
+  if (length < 1e-3) return { x: desiredX, z: desiredZ, reach: 1, turn: 0 };
+
+  const floor = Math.min(1, minDistance / length);
+  let best = { free: -1, turn: 0 };
+
+  // Deux passes. La première reste dans le cadre. La seconde n'est jouée que
+  // si la première a échoué : mieux vaut un personnage poussé vers le bord de
+  // l'écran qu'une caméra dans l'écorce, où l'on ne voit plus rien du tout.
+  for (const escape of [false, true]) {
+    for (const turn of BOOM_TURNS) {
+      const magnitude = Math.abs(turn);
+      if (magnitude > BOOM_MAX_TURN) break;
+      if (escape ? magnitude <= maxTurn : magnitude > maxTurn) continue;
+      const cos = Math.cos(turn);
+      const sin = Math.sin(turn);
+      const rx = playerX + dx * cos - dz * sin;
+      const rz = playerZ + dx * sin + dz * cos;
+      const free = cameraClearance(playerX, playerZ, rx, rz, radius);
+      // Ligne entièrement dégagée : on s'arrête au plus petit angle qui la donne.
+      if (free >= 1) return { x: rx, z: rz, reach: 1, turn };
+      if (free > best.free) best = { free, turn };
+    }
+  }
+
+  // Aucune ligne dégagée : on garde la meilleure et on recule dessus, mais
+  // jamais au point d'entrer dans le personnage.
+  const reach = Math.max(floor, best.free);
+  const cos = Math.cos(best.turn);
+  const sin = Math.sin(best.turn);
+  const rx = dx * cos - dz * sin;
+  const rz = dx * sin + dz * cos;
+  return {
+    x: playerX + rx * reach,
+    z: playerZ + rz * reach,
+    reach,
+    turn: best.turn,
+  };
 }

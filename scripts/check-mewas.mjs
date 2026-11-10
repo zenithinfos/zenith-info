@@ -170,12 +170,21 @@ const fed = eatFruit(state);
 check("manger un fruit remplit la faim", fed.code === "eat.ok");
 check("le fruit est consommé", fed.state.fruits === state.fruits - 1);
 check(
-  "les fruits se ramassent en marchant",
+  "les fruits se ramassent au contact d'un plant",
   (() => {
-    let walker = { ...state, fruits: 0, forage: 0 };
-    const walking = { ...idle, forward: true };
-    for (let i = 0; i < 40; i += 1) walker = step(walker, walking, 1).state;
-    return walker.fruits >= 1;
+    // Ancien test : marcher quarante pas et espérer croiser un plant. Il
+    // dépendait du minuteur qui distribuait des fruits sans rien à cueillir —
+    // et depuis que la cueillette se fait vraiment, il échouait au hasard de
+    // la forêt générée. On place donc le plant sous les pieds : ce qui est
+    // testé ici, c'est le branchement du ramassage dans `step`, pas le hasard.
+    const target = state.foragePlants[0];
+    const walker = {
+      ...state,
+      fruits: 0,
+      player: { ...state.player, position: [target.x, 0, target.z], motion: "walk" },
+    };
+    const once = step(walker, idle, 1 / 60).state;
+    return once.fruits >= 1;
   })(),
 );
 

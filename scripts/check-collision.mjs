@@ -327,5 +327,98 @@ console.log("\nLe camp de départ");
   check("aucune pièce de bois sur le point de départ", tooClose === 0, `${tooClose} segment(s)`);
 }
 
+
+console.log("\nLa caméra ne passe plus dans le décor");
+{
+  // Signalé : « transparence lors de passage des obstacles ». Mesuré avant
+  // correctif : le bras de la caméra se raccourcissait jusqu'à **37 cm**, donc
+  // l'œil entrait dans les épaules du personnage — et dans 0,6 % des positions
+  // il finissait carrément **dans** un tronc. Comme le bois est dessiné en
+  // faces avant, la paroi visible devenait une face arrière, éliminée : on
+  // voyait la forêt à travers l'arbre et le corps paraissait coupé.
+  const NOMINAL = 3.1;
+  const MIN = world.BOOM_MIN_DISTANCE;
+  check("le bras a un plancher", MIN >= 1, `${MIN.toFixed(2)} m`);
+
+  let samples = 0;
+  let insideWood = 0;
+  let shorter = 0;
+  let tooClose = 0;
+  let worstReach = 1;
+  /** Le point est-il dans du bois dessiné ? */
+  const inWood = (x, z) =>
+    wood.blocks.some((block) => distanceToSegment(x, z, block) < block.r);
+
+  for (let i = 0; i < 1600; i += 1) {
+    // Positions pseudo-aléatoires mais reproductibles.
+    const px = (((i * 2654435761) % 1000) / 1000 - 0.5) * 90;
+    const pz = (((i * 40503 + 12345) % 1000) / 1000 - 0.5) * 90;
+    if (!isClear(px, pz)) continue;
+    samples += 1;
+
+    const shot = world.solveBoom(px, pz, px, pz + NOMINAL);
+    const distance = Math.hypot(shot.x - px, shot.z - pz);
+    worstReach = Math.min(worstReach, shot.reach);
+    if (distance < MIN - 1e-6) tooClose += 1;
+    if (shot.reach < 1) shorter += 1;
+    if (inWood(shot.x, shot.z)) insideWood += 1;
+  }
+
+  check("la caméra reste hors du personnage", tooClose === 0, `${tooClose}/${samples} position(s) trop proche(s)`);
+  check("la caméra reste hors du bois", insideWood === 0, `${insideWood}/${samples} dans un tronc`);
+  check(
+    "le bras garde sa longueur",
+    shorter / samples < 0.02,
+    `raccourci dans ${((100 * shorter) / samples).toFixed(1)} % des cas · minimum ${(worstReach * NOMINAL).toFixed(2)} m`,
+  );
+
+  // Le cas construit : un fût juste derrière l'épaule. La caméra doit trouver
+  // une ligne dépassant le tronc, pas entrer dedans.
+  const target = nearest.block;
+  const midX = (target.ax + target.bx) / 2;
+  const midZ = (target.az + target.bz) / 2;
+  const limit = world.boomTurnLimit(68, 16 / 9);
+  const shot = world.solveBoom(midX, midZ - 1.2, midX, midZ - 1.2 + NOMINAL, undefined, undefined, limit);
+  const gap = Math.hypot(shot.x - midX, shot.z - (midZ - 1.2));
+  check("derrière un tronc, la caméra pivote", shot.turn !== 0, `angle ${(shot.turn * 57.3).toFixed(0)}° · ${gap.toFixed(2)} m`);
+  check("et elle reste à distance du corps", gap >= MIN - 1e-6, `${gap.toFixed(2)} m`);
+  check("la caméra n'entre pas dans ce tronc", !inWood(shot.x, shot.z));
+
+  // Sur un téléphone en portrait, le champ est bien plus étroit : la borne de
+  // rotation doit se resserrer d'elle-même, sinon le personnage sort du cadre.
+  const phone = world.boomTurnLimit(68, 0.5);
+  check("la borne suit le champ de l'écran", phone < limit, `portrait ${(phone * 57.3).toFixed(0)}° · bureau ${(limit * 57.3).toFixed(0)}°`);
+
+  // L'échappée hors cadre existe, mais elle doit rester l'exception : sur la
+  // forêt entière, combien de positions la déclenchent-elles ?
+  let escapes = 0;
+  let sweep = 0;
+  for (let i = 0; i < 1200; i += 1) {
+    const px = (((i * 2654435761) % 997) / 997 - 0.5) * 90;
+    const pz = (((i * 40503 + 12345) % 991) / 991 - 0.5) * 90;
+    if (!isClear(px, pz)) continue;
+    sweep += 1;
+    const shot = world.solveBoom(px, pz, px, pz + NOMINAL, undefined, undefined, limit);
+    if (Math.abs(shot.turn) > limit + 1e-9) escapes += 1;
+    if (Math.abs(shot.turn) > world.BOOM_MAX_TURN + 1e-9) {
+      console.log(`    angle hors borne : ${(shot.turn * 57.3).toFixed(0)}°`);
+    }
+  }
+  check(
+    "l'échappée hors cadre reste exceptionnelle",
+    escapes / sweep < 0.01,
+    `${((100 * escapes) / sweep).toFixed(1)} % des positions`,
+  );
+
+  // Les matières du bois ne peuvent pas être traversées : une face arrière de
+  // fût doit compter comme une face avant, sinon un arbre devient une fenêtre.
+  const { readFileSync } = await import("node:fs");
+  const scene = readFileSync("src/components/Scene.tsx", "utf8");
+  const trunkBlock = scene.slice(scene.indexOf("const trunkMaterial"), scene.indexOf("const cardGeometry"));
+  const logBlock = scene.slice(scene.indexOf("const logMaterial"), scene.indexOf("const logMaterial") + 700);
+  check("les fûts sont dessinés double face", trunkBlock.includes("THREE.DoubleSide"));
+  check("les troncs tombés aussi", logBlock.includes("THREE.DoubleSide"));
+}
+
 console.log(failures === 0 ? "\nOn traverse les troncs en passant dessus, jamais au travers.\n" : `\n${failures} vérification(s) en échec.\n`);
 process.exit(failures === 0 ? 0 : 1);
